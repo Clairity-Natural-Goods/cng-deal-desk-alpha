@@ -64,6 +64,11 @@ function addStyles() {
     #${AUTH_ID} .auth-subtitle, #${AUTH_ID} .auth-switch { color: #64748b; font-size: 13.5px; }
     #${AUTH_ID} form { display: grid; gap: 14px; margin-top: 24px; }
     #${AUTH_ID} label { display: grid; gap: 6px; color: #334155; font-weight: 600; font-size: 13px; }
+    #${AUTH_ID} .auth-password-wrapper { position: relative; display: flex; align-items: center; width: 100%; }
+    #${AUTH_ID} .auth-password-wrapper input { padding-right: 42px; }
+    #${AUTH_ID} .auth-toggle-password { position: absolute; right: 8px; top: 50%; transform: translateY(-50%); background: none; border: none; padding: 4px; cursor: pointer; color: #64748b; display: flex; align-items: center; justify-content: center; border-radius: 6px; transition: color 0.15s ease, background-color 0.15s ease; }
+    #${AUTH_ID} .auth-toggle-password:hover { color: #047857; background: #f1f5f9; }
+    #${AUTH_ID} .auth-toggle-password:focus-visible { outline: 2px solid #047857; outline-offset: 1px; }
     #${AUTH_ID} input, #${AUTH_ID} select { box-sizing: border-box; width: 100%; min-height: 42px; padding: 9px 12px; border: 1px solid #cbd5e1; border-radius: 8px; background: white; color: #0f172a; font: inherit; }
     #${AUTH_ID} input:focus, #${AUTH_ID} select:focus { outline: 2px solid #047857; outline-offset: 1px; }
     #${AUTH_ID} .auth-hint { margin: -6px 0 0; color: #64748b; font-size: 12px; }
