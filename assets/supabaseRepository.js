@@ -6,6 +6,15 @@
  */
 
 import { supabase } from "./supabaseClient.js";
+import {
+  saveOfflineTransaction,
+  getOfflineTransaction,
+  getAllOfflineTransactions,
+  deleteOfflineTransaction,
+  cacheCounterparties,
+  getCachedParties,
+} from "./offline/offlineStore.js";
+import { syncEngine } from "./offline/syncEngine.js";
 
 // Counterparty normalization rules
 export function normalizeCounterpartyName(name) {
@@ -34,6 +43,8 @@ const TABLE_MAP = {
   Deal: "deals",
   DealEvent: "deal_events",
   User: "profiles",
+  Transaction: "transactions",
+  TransactionEvent: "transaction_events",
 };
 
 function createEntityRepository(entityName) {
@@ -41,6 +52,20 @@ function createEntityRepository(entityName) {
 
   return {
     async filter(query = {}, options = {}) {
+      // Special offline handling for Transaction
+      if (entityName === "Transaction") {
+        try {
+          if (typeof navigator !== "undefined" && !navigator.onLine) {
+            return await getAllOfflineTransactions();
+          }
+          // Merge remote and offline
+          const list = await syncEngine.fetchCloudAndMerge();
+          return list;
+        } catch {
+          return await getAllOfflineTransactions();
+        }
+      }
+
       let req = supabase.from(tableName).select("*");
 
       // Apply equality filters
@@ -69,14 +94,32 @@ function createEntityRepository(entityName) {
 
       const { data, error } = await req;
       if (error) {
+        // Fallback for Party when offline
+        if (entityName === "Party") {
+          const cached = await getCachedParties();
+          if (cached && cached.length > 0) return cached;
+        }
         console.error(`Supabase filter query failed on ${tableName}:`, error);
         throw error;
       }
+
+      // Cache counterparties for offline field use
+      if (entityName === "Party" && Array.isArray(data)) {
+        cacheCounterparties(data).catch(() => {});
+      }
+
       return data || [];
     },
 
     async get(id) {
       if (!id) return null;
+
+      // Special offline handling for Transaction
+      if (entityName === "Transaction") {
+        const local = await getOfflineTransaction(id);
+        if (local) return local;
+      }
+
       const { data, error } = await supabase
         .from(tableName)
         .select("*")
@@ -91,6 +134,15 @@ function createEntityRepository(entityName) {
     },
 
     async create(payload = {}) {
+      // Special offline handling for Transaction
+      if (entityName === "Transaction") {
+        const localRecord = await saveOfflineTransaction(payload);
+        if (typeof navigator === "undefined" || navigator.onLine) {
+          syncEngine.syncPendingTransactions().catch(() => {});
+        }
+        return localRecord;
+      }
+
       const id = payload.id || generateRecordId();
       const now = new Date().toISOString();
 
@@ -156,6 +208,16 @@ function createEntityRepository(entityName) {
 
     async update(id, payload = {}) {
       if (!id) throw new Error("ID is required for update.");
+
+      // Special offline handling for Transaction
+      if (entityName === "Transaction") {
+        const local = await saveOfflineTransaction({ client_id: id, ...payload });
+        if (typeof navigator === "undefined" || navigator.onLine) {
+          syncEngine.syncPendingTransactions().catch(() => {});
+        }
+        return local;
+      }
+
       const now = new Date().toISOString();
 
       // Clean payload: remove id from update body
@@ -186,6 +248,13 @@ function createEntityRepository(entityName) {
 
     async delete(id) {
       if (!id) throw new Error("ID is required for delete.");
+
+      // Special offline handling for Transaction
+      if (entityName === "Transaction") {
+        await deleteOfflineTransaction(id);
+        return { success: true };
+      }
+
       const { error } = await supabase
         .from(tableName)
         .delete()
@@ -388,6 +457,17 @@ export function createSupabaseDatabaseAdapter() {
         return entityCache[entityName];
       },
     }),
+
+    offline: {
+      saveOfflineTransaction,
+      getOfflineTransaction,
+      getAllOfflineTransactions,
+      deleteOfflineTransaction,
+      cacheCounterparties,
+      getCachedParties,
+    },
+
+    syncEngine: syncEngine,
 
     integrations: {
       Core: {

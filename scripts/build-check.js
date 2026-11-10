@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { execSync } from "node:child_process";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(__dirname, "..");
@@ -32,11 +33,15 @@ checkFile("package.json", "Package Manifest");
 checkFile("supabase/migrations/20261104000001_initial_schema.sql", "Supabase Initial Schema Migration");
 checkFile("supabase/migrations/20261104000002_seed_data.sql", "Supabase Seed Data Migration");
 checkFile("supabase/migrations/20261104000003_auto_confirm_users.sql", "Supabase Auto-Confirm Migration");
+checkFile("supabase/migrations/20261110000001_mvtr_transactions.sql", "Supabase MVTR Transactions Migration");
 
 // 3. Verify JavaScript Assets & Modules
 checkFile("assets/supabaseClient.js", "Supabase JavaScript Client");
 checkFile("assets/supabaseRepository.js", "Supabase Entity Repository");
 checkFile("assets/migrationUtility.js", "Local Storage Migration Utility");
+checkFile("assets/offline/offlineStore.js", "MVTR Offline Store");
+checkFile("assets/offline/syncEngine.js", "MVTR Offline Sync Engine");
+checkFile("assets/transactions/TransactionModule.js", "MVTR Transaction Module");
 checkFile("assets/auth/entry.js", "Application Auth & Routing Bootstrap");
 checkFile("assets/auth/authContext.js", "Supabase Auth Context");
 checkFile("assets/auth/LoginPage.js", "Login View Component");
@@ -47,7 +52,6 @@ checkFile("assets/index-A159RRyL.js", "Compiled React App Bundle");
 
 // 3.1 JavaScript Syntax Verification
 console.log("\nVerifying JavaScript syntax across all bundles...");
-import { execSync } from "node:child_process";
 const jsFilesToCheck = [
   "assets/index-A159RRyL.js",
   "assets/auth/entry.js",
@@ -55,6 +59,9 @@ const jsFilesToCheck = [
   "assets/supabaseClient.js",
   "assets/supabaseRepository.js",
   "assets/migrationUtility.js",
+  "assets/offline/offlineStore.js",
+  "assets/offline/syncEngine.js",
+  "assets/transactions/TransactionModule.js",
 ];
 
 for (const f of jsFilesToCheck) {
@@ -98,4 +105,3 @@ if (hasErrors) {
 } else {
   console.log("\n>>> BUILD INTEGRITY CHECK PASSED (100% production ready)");
 }
-

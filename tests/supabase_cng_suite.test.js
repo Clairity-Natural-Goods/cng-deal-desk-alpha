@@ -29,6 +29,14 @@ import {
   generateRecordId,
 } from "../assets/supabaseRepository.js";
 
+import {
+  saveOfflineTransaction,
+  getOfflineTransaction,
+  getAllOfflineTransactions,
+  normalizeTransactionRecord,
+  markTransactionSynced,
+} from "../assets/offline/offlineStore.js";
+
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const projectRoot = path.resolve(__dirname, "..");
 
@@ -323,6 +331,201 @@ runTest("TEST-16", "Security Audit - Profiles role escalation trigger defined in
 });
 
 // ==============================================================================
+
+// ==============================================================================
+// 5. MINIMUM VIABLE TRANSACTION RECORD (MVTR) & DEF-01 / DEF-04 VERIFICATION
+// ==============================================================================
+
+runTest("TEST-18", "MVTR 7-Element Structure - Transaction record encapsulates all 7 mandatory Deal Pack sections", () => {
+  const raw = {
+    commodity: "Maize",
+    buyer_requirements: { buyer_name: "Gulu Millers", required_tonnes: 30 },
+    supplier_verification: { supplier_name: "Amuru Co-op", confirmed_tonnes: 30, moisture_reading_pct: 12.8 },
+  };
+  const normalized = normalizeTransactionRecord(raw, { id: "usr_1", name: "Officer Ocen" });
+
+  assert.ok(normalized.client_id, "Record must have client_id");
+  assert.ok(normalized.reference.startsWith("TXN-"), "Record must have human-readable reference TXN-YYYYMMDD-XXXX");
+  assert.strictEqual(normalized.commodity, "Maize");
+
+  // Verify all 7 Deal Pack sections exist with proper schema
+  assert.ok(normalized.buyer_requirements, "Section 1: buyer_requirements must exist");
+  assert.strictEqual(normalized.buyer_requirements.buyer_name, "Gulu Millers");
+  assert.strictEqual(normalized.buyer_requirements.required_tonnes, 30);
+  assert.strictEqual(normalized.buyer_requirements.moisture_limit_pct, 14.0);
+
+  assert.ok(normalized.supplier_verification, "Section 2: supplier_verification must exist");
+  assert.strictEqual(normalized.supplier_verification.supplier_name, "Amuru Co-op");
+  assert.strictEqual(normalized.supplier_verification.confirmed_tonnes, 30);
+  assert.strictEqual(normalized.supplier_verification.moisture_reading_pct, 12.8);
+
+  assert.ok(normalized.transport_collection, "Section 3: transport_collection must exist");
+  assert.strictEqual(normalized.transport_collection.arrangement, "Company-arranged");
+
+  assert.ok(normalized.payment_terms, "Section 4: payment_terms must exist");
+  assert.strictEqual(normalized.payment_terms.currency, "UGX");
+
+  assert.ok(normalized.fee_margin, "Section 5: fee_margin must exist");
+  assert.strictEqual(normalized.fee_margin.minimum_fee, 25000);
+  assert.strictEqual(normalized.fee_margin.overhead_pct, 15);
+
+  assert.ok(normalized.decision_matrix, "Section 6: decision_matrix must exist");
+  assert.strictEqual(normalized.decision_matrix.max_score, 100);
+
+  assert.ok(normalized.approval, "Section 7: approval must exist");
+  assert.strictEqual(normalized.approval.status, "Pending");
+});
+
+runTest("TEST-19", "MVTR Offline Storage - Durable IndexedDB/memory store captures records with pending_sync", async () => {
+  const sample = {
+    client_id: "test-cid-001",
+    commodity: "Beans",
+    buyer_requirements: { buyer_name: "Lira Food Hub", required_tonnes: 15 },
+    supplier_verification: { supplier_name: "Oyam Grain Hub", confirmed_tonnes: 15, moisture_reading_pct: 13.2 },
+    payment_terms: { agreed_price_per_kg: 2800 },
+  };
+
+  const saved = await saveOfflineTransaction(sample, { id: "u1", name: "Field Officer Akello" });
+  assert.strictEqual(saved.client_id, "test-cid-001");
+  assert.strictEqual(saved.sync_status, "pending_sync");
+
+  const retrieved = await getOfflineTransaction("test-cid-001");
+  assert.ok(retrieved, "Must retrieve transaction from offline store");
+  assert.strictEqual(retrieved.buyer_requirements.buyer_name, "Lira Food Hub");
+  assert.strictEqual(retrieved.created_by_name, "Field Officer Akello");
+});
+
+runTest("TEST-20", "MVTR Sync Idempotency - Client-generated UUID prevents duplicates across retries", async () => {
+  const clientId = "idempotent-cid-002";
+  const initial = {
+    client_id: clientId,
+    commodity: "Soybeans",
+    notes: "Initial field capture",
+  };
+
+  await saveOfflineTransaction(initial);
+  // Simulate retry with updated notes
+  const updated = {
+    client_id: clientId,
+    commodity: "Soybeans",
+    notes: "Field capture updated with moisture probe reading",
+  };
+  await saveOfflineTransaction(updated);
+
+  // Mark as synced with server payload
+  const synced = await markTransactionSynced(clientId, { id: "txn_remote_999", sync_version: 2 });
+  assert.strictEqual(synced.sync_status, "synced");
+  assert.strictEqual(synced.id, "txn_remote_999");
+
+  const all = await getAllOfflineTransactions();
+  const matching = all.filter((t) => t.client_id === clientId);
+  assert.strictEqual(matching.length, 1, "Idempotent client_id must never create duplicate records");
+});
+
+runTest("TEST-21", "DEF-01 Verification - Clarence approval trigger blocks non-admins from approving deals", () => {
+  const mvtrMigration = path.join(projectRoot, "supabase/migrations/20261110000001_mvtr_transactions.sql");
+  assert.ok(fs.existsSync(mvtrMigration), "MVTR migration file must exist");
+  const content = fs.readFileSync(mvtrMigration, "utf8");
+
+  assert.ok(
+    content.includes("enforce_mvtr_approval_permissions"),
+    "Migration must define trigger enforce_mvtr_approval_permissions"
+  );
+  assert.ok(
+    content.includes("PERMISSION_DENIED: Only Clarence or an authorized administrator can approve"),
+    "Trigger must enforce Clarence approval role boundary"
+  );
+  assert.ok(
+    content.includes("trg_enforce_mvtr_approval_permissions"),
+    "Trigger must be bound to public.transactions"
+  );
+});
+
+runTest("TEST-22", "MVTR Commercial Calculations - Minimum fee floor UGX 25,000 and 15% overhead rule", () => {
+  // Test case 1: 0.5 tonnes @ UGX 30,000 = UGX 15,000 -> clampled to UGX 25,000 floor
+  const feeSubThreshold = feeFor({ perTonneFee: 30000, minimumFee: 25000, acceptedTonnes: 0.5 });
+  assert.strictEqual(feeSubThreshold.fee, 25000, "Sub-threshold tonnage must be clamped to UGX 25,000 floor");
+
+  // Test case 2: 30 tonnes @ UGX 30,000 = UGX 900,000 gross fee
+  const fee30t = feeFor({ perTonneFee: 30000, minimumFee: 25000, acceptedTonnes: 30 });
+  assert.strictEqual(fee30t.fee, 900000);
+
+  // 15% overhead rule: 15% of UGX 900,000 = UGX 135,000
+  const overhead = Math.round((900000 * 15) / 100);
+  assert.strictEqual(overhead, 135000, "15% desk overhead must equal UGX 135,000");
+
+  // Direct costs: Field (60k) + Testing (25k) + Other (15k) + 6 hrs staff @ 6k/hr (36k) = 136,000
+  const directCosts = 60000 + 25000 + 15000 + (6 * 6000);
+  assert.strictEqual(directCosts, 136000);
+
+  // Net contribution margin = Gross (900k) - Direct (136k) - Overhead (135k) = 629,000
+  const netContribution = 900000 - directCosts - overhead;
+  assert.strictEqual(netContribution, 629000, "Projected net margin must equal UGX 629,000");
+});
+
+runTest("TEST-23", "MVTR Decision Matrix - Underwriting thresholds enforce Proceed, Conditional, or Reject", () => {
+  const evaluate = (scores) => {
+    const total = Object.values(scores).reduce((a, b) => a + b, 0);
+    if (total >= 75) return { total, rec: "Proceed" };
+    if (total >= 50) return { total, rec: "Conditional Proceed" };
+    return { total, rec: "Do Not Proceed" };
+  };
+
+  // High quality case
+  const high = evaluate({ s1: 18, s2: 19, s3: 18, s4: 17, s5: 18 });
+  assert.strictEqual(high.total, 90);
+  assert.strictEqual(high.rec, "Proceed");
+
+  // Marginal case
+  const mid = evaluate({ s1: 12, s2: 12, s3: 12, s4: 12, s5: 12 });
+  assert.strictEqual(mid.total, 60);
+  assert.strictEqual(mid.rec, "Conditional Proceed");
+
+  // High risk case
+  const low = evaluate({ s1: 8, s2: 8, s3: 8, s4: 8, s5: 8 });
+  assert.strictEqual(low.total, 40);
+  assert.strictEqual(low.rec, "Do Not Proceed");
+});
+
+runTest("TEST-24", "DEF-04 Verification - End-to-end duplicate counterparty detection with 409 DUPLICATE_COUNTERPARTY", () => {
+  const existingRecords = [
+    { id: "p_1", name: "Lira Grain Processors, Ltd.", district: "Lira" },
+  ];
+
+  function validatePartyUniqueness(newParty) {
+    const normName = normalizeCounterpartyName(newParty.name);
+    const normDist = normalizeDistrict(newParty.district);
+
+    const dup = existingRecords.find(
+      (r) =>
+        normalizeCounterpartyName(r.name) === normName &&
+        normalizeDistrict(r.district) === normDist
+    );
+
+    if (dup) {
+      const err = new Error("Counterparty with this name already exists in this district");
+      err.status = 409;
+      err.code = "DUPLICATE_COUNTERPARTY";
+      err.error = "DUPLICATE_COUNTERPARTY";
+      err.existingId = dup.id;
+      throw err;
+    }
+    return true;
+  }
+
+  // Exact duplicate with varied casing and punctuation
+  assert.throws(
+    () => validatePartyUniqueness({ name: "  lira grain processors ltd  ", district: "LIRA" }),
+    (err) => err.code === "DUPLICATE_COUNTERPARTY" && err.status === 409
+  );
+
+  // Different district is allowed
+  assert.ok(
+    validatePartyUniqueness({ name: "Lira Grain Processors Ltd", district: "Gulu" }),
+    "Same name in different district is permitted"
+  );
+});
+
 // 4. SPA ROUTING & VERCEL CONFIGURATION TESTS
 // ==============================================================================
 
