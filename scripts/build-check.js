@@ -42,6 +42,8 @@ checkFile("assets/migrationUtility.js", "Local Storage Migration Utility");
 checkFile("assets/offline/offlineStore.js", "MVTR Offline Store");
 checkFile("assets/offline/syncEngine.js", "MVTR Offline Sync Engine");
 checkFile("assets/transactions/TransactionModule.js", "MVTR Transaction Module");
+checkFile("assets/matrix/financialEngine.js", "Decision Matrix Financial Engine");
+checkFile("assets/matrix/DecisionMatrixModule.js", "Decision Matrix UI Module");
 checkFile("assets/auth/entry.js", "Application Auth & Routing Bootstrap");
 checkFile("assets/auth/authContext.js", "Supabase Auth Context");
 checkFile("assets/auth/LoginPage.js", "Login View Component");
@@ -62,6 +64,8 @@ const jsFilesToCheck = [
   "assets/offline/offlineStore.js",
   "assets/offline/syncEngine.js",
   "assets/transactions/TransactionModule.js",
+  "assets/matrix/financialEngine.js",
+  "assets/matrix/DecisionMatrixModule.js",
 ];
 
 for (const f of jsFilesToCheck) {

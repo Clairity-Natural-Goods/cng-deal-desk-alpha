@@ -95,6 +95,18 @@ export function generateTransactionReference() {
 }
 
 /**
+ * Generate human-readable matrix record reference: MAT-YYYYMMDD-XXXX
+ */
+export function generateMatrixReference() {
+  const now = new Date();
+  const yyyy = now.getFullYear();
+  const mm = String(now.getMonth() + 1).padStart(2, "0");
+  const dd = String(now.getDate()).padStart(2, "0");
+  const rand = Math.floor(1000 + Math.random() * 9000);
+  return `MAT-${yyyy}${mm}${dd}-${rand}`;
+}
+
+/**
  * Ensure standard 7 Deal Pack sections with defaults
  */
 export function normalizeTransactionRecord(data, currentUser = null) {
@@ -224,6 +236,23 @@ export function normalizeTransactionRecord(data, currentUser = null) {
     sync_version: Number(data.sync_version) || 1,
     created_at: data.created_at || now,
     updated_at: now,
+
+    // Matrix v1 specific properties
+    is_matrix_record: Boolean(data.is_matrix_record),
+    volume: data.volume !== undefined ? Number(data.volume) : (Number(data.buyer_requirements?.required_tonnes) || 0),
+    volume_unit: data.volume_unit || "MT",
+    base_price: data.base_price !== undefined ? Number(data.base_price) : (Number(data.payment_terms?.agreed_price_per_kg) || 0),
+    price_unit: data.price_unit || "UGX/KG",
+    transport_cost: data.transport_cost !== undefined ? Number(data.transport_cost) : (Number(data.transport_collection?.total_transport_cost) || 0),
+    handling_cogs: data.handling_cogs !== undefined ? Number(data.handling_cogs) : 0,
+    handling_basis: data.handling_basis || "TOTAL",
+    gross_revenue: data.gross_revenue !== undefined ? data.gross_revenue : null,
+    total_costs: data.total_costs !== undefined ? data.total_costs : null,
+    net_margin: data.net_margin !== undefined ? data.net_margin : null,
+    margin_percentage: data.margin_percentage !== undefined ? data.margin_percentage : null,
+    district: data.district || data.supplier_verification?.district || data.buyer_requirements?.delivery_district || "Amuru",
+    buyer_name: data.buyer_name || data.buyer_requirements?.buyer_name || "",
+    supplier_name: data.supplier_name || data.supplier_verification?.supplier_name || "",
   };
 }
 
@@ -461,5 +490,138 @@ export async function getOfflineStats() {
     synced: all.filter((t) => t.sync_status === "synced").length,
     drafts: all.filter((t) => t.status === "Draft").length,
     approved: all.filter((t) => t.status === "Approved").length,
+  };
+}
+
+/**
+ * ==============================================================================
+ *   DEAL DECISION MATRIX v1 — STORAGE UTILITIES
+ * ==============================================================================
+ */
+
+export const BENCHMARK_MATRIX_SEEDS = [
+  {
+    client_id: "mat_seed_001",
+    reference: "MAT-20261111-001",
+    is_matrix_record: true,
+    commodity: "Maize",
+    volume: 30,
+    volume_unit: "MT",
+    base_price: 1150,
+    price_unit: "UGX/KG",
+    transport_cost: 750000,
+    handling_cogs: 150000,
+    handling_basis: "TOTAL",
+    gross_revenue: 34500000,
+    total_costs: 900000,
+    net_margin: 33600000,
+    margin_percentage: 97.39,
+    status: "Approved",
+    buyer_name: "Gulu Grain Millers Ltd",
+    supplier_name: "Amuru Farmers Co-op",
+    district: "Amuru",
+    created_by_name: "Clarence (MD)",
+    notes: "Commercial benchmark deal in Amuru-Gulu corridor.",
+    created_at: "2026-11-10T10:00:00Z",
+    updated_at: "2026-11-10T10:00:00Z",
+  },
+  {
+    client_id: "mat_seed_002",
+    reference: "MAT-20261111-002",
+    is_matrix_record: true,
+    commodity: "Soybeans",
+    volume: 15,
+    volume_unit: "MT",
+    base_price: 2400,
+    price_unit: "UGX/KG",
+    transport_cost: 450000,
+    handling_cogs: 25000,
+    handling_basis: "PER_MT",
+    gross_revenue: 36000000,
+    total_costs: 825000,
+    net_margin: 35175000,
+    margin_percentage: 97.71,
+    status: "Awaiting Review",
+    buyer_name: "Lira Oil Extractors",
+    supplier_name: "Nwoya Producers Association",
+    district: "Nwoya",
+    created_by_name: "Deal Desk Analyst",
+    notes: "High-protein soybean batch with per-MT handling basis.",
+    created_at: "2026-11-10T14:30:00Z",
+    updated_at: "2026-11-10T14:30:00Z",
+  },
+];
+
+/**
+ * Save Deal Decision Matrix record
+ */
+export async function saveMatrixRecord(recordData, currentUser = null) {
+  const now = new Date().toISOString();
+  const clientId = recordData.client_id || (typeof crypto !== "undefined" && crypto.randomUUID ? crypto.randomUUID() : `mat_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`);
+  const reference = recordData.reference || generateMatrixReference();
+  const createdByName = recordData.created_by_name || currentUser?.name || currentUser?.email || "Deal Desk Analyst";
+
+  const matrixEntry = {
+    ...recordData,
+    client_id: clientId,
+    reference: reference,
+    is_matrix_record: true,
+    created_by_name: createdByName,
+    created_by: recordData.created_by || currentUser?.id || null,
+    status: recordData.status || "Draft",
+    commodity: recordData.commodity || "Maize",
+    volume: Number(recordData.volume) || 0,
+    volume_unit: recordData.volume_unit || "MT",
+    base_price: Number(recordData.base_price) || 0,
+    price_unit: recordData.price_unit || "UGX/KG",
+    transport_cost: Number(recordData.transport_cost) || 0,
+    handling_cogs: Number(recordData.handling_cogs) || 0,
+    handling_basis: recordData.handling_basis || "TOTAL",
+    gross_revenue: recordData.gross_revenue !== undefined ? recordData.gross_revenue : null,
+    total_costs: recordData.total_costs !== undefined ? recordData.total_costs : null,
+    net_margin: recordData.net_margin !== undefined ? recordData.net_margin : null,
+    margin_percentage: recordData.margin_percentage !== undefined ? recordData.margin_percentage : null,
+    buyer_name: recordData.buyer_name || "",
+    supplier_name: recordData.supplier_name || "",
+    district: recordData.district || "Amuru",
+    notes: recordData.notes || "",
+    sync_status: recordData.sync_status || "pending_sync",
+    created_at: recordData.created_at || now,
+    updated_at: now,
+  };
+
+  return saveOfflineTransaction(matrixEntry, currentUser);
+}
+
+/**
+ * Retrieve all Deal Decision Matrix records
+ */
+export async function getAllMatrixRecords() {
+  const all = await getAllOfflineTransactions();
+  let matrixList = all.filter((r) => r.is_matrix_record || (r.reference && r.reference.startsWith("MAT-")));
+
+  // Ensure standard benchmark records are seeded into the store
+  for (const seed of BENCHMARK_MATRIX_SEEDS) {
+    if (!matrixList.some((r) => r.client_id === seed.client_id || r.reference === seed.reference)) {
+      await saveOfflineTransaction(seed);
+      matrixList.push(seed);
+    }
+  }
+
+  return matrixList;
+}
+
+/**
+ * Get Matrix Summary Statistics
+ */
+export async function getMatrixStats() {
+  const records = await getAllMatrixRecords();
+  return {
+    total: records.length,
+    drafts: records.filter((r) => r.status === "Draft").length,
+    awaitingReview: records.filter((r) => r.status === "Awaiting Review" || r.status === "SubmittedForReview").length,
+    positiveMargin: records.filter((r) => r.net_margin !== null && r.net_margin > 0).length,
+    negativeMargin: records.filter((r) => r.net_margin !== null && r.net_margin < 0).length,
+    incomplete: records.filter((r) => r.gross_revenue === null || r.net_margin === null).length,
   };
 }

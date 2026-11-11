@@ -35,7 +35,26 @@ import {
   getAllOfflineTransactions,
   normalizeTransactionRecord,
   markTransactionSynced,
+  saveMatrixRecord,
+  getAllMatrixRecords,
+  getMatrixStats,
+  generateMatrixReference,
 } from "../assets/offline/offlineStore.js";
+
+import {
+  COMMODITIES,
+  HANDLING_BASIS,
+  parseFinancialInput,
+  normalizeVolume,
+  calculateGrossRevenue,
+  calculateTotalCosts,
+  calculateNetMargin,
+  calculateMarginPercentage,
+  evaluateDealMatrix,
+  validateMatrixInputs,
+  formatCurrency,
+  formatPercentage,
+} from "../assets/matrix/financialEngine.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const projectRoot = path.resolve(__dirname, "..");
@@ -48,18 +67,24 @@ console.log("===================================================================
 
 let passedCount = 0;
 let failedCount = 0;
+let testQueue = Promise.resolve();
 
 function runTest(testId, description, fn) {
-  process.stdout.write(`>>> [${testId}] ${description}... `);
-  try {
-    fn();
-    console.log("PASSED");
-    passedCount++;
-  } catch (err) {
-    console.log("FAILED");
-    console.error(`    Error in [${testId}]:`, err.message);
-    failedCount++;
-  }
+  testQueue = testQueue.then(async () => {
+    process.stdout.write(`>>> [${testId}] ${description}... `);
+    try {
+      const res = fn();
+      if (res && typeof res.then === "function") {
+        await res;
+      }
+      console.log("PASSED");
+      passedCount++;
+    } catch (err) {
+      console.log("FAILED");
+      console.error(`    Error in [${testId}]:`, err.message);
+      failedCount++;
+    }
+  });
 }
 
 // ==============================================================================
@@ -538,9 +563,226 @@ runTest("TEST-17", "Vercel Configuration - vercel.json contains universal SPA re
   assert.ok(catchAll, "Universal rewrite rule /(.*) -> /index.html must be configured for direct route refreshes");
 });
 
+
+// 5. DEAL DECISION MATRIX v1 FINANCIAL ENGINE & STORAGE TESTS
+// ==============================================================================
+
+runTest("TEST-25", "Deal Decision Matrix v1 - Gross Revenue calculation with unit conversions and edge cases", () => {
+  // 1. 30 MT @ 1,150 UGX/KG = 30,000 KG * 1,150 = UGX 34,500,000
+  const gross1 = calculateGrossRevenue(30, 1150, "MT", "UGX/KG");
+  assert.strictEqual(gross1, 34500000, "30 MT at 1,150 UGX/KG must yield 34,500,000 UGX");
+
+  // 2. 5,000 KG @ 1,200 UGX/KG = 5,000 * 1,200 = UGX 6,000,000
+  const gross2 = calculateGrossRevenue(5000, 1200, "KG", "UGX/KG");
+  assert.strictEqual(gross2, 6000000, "5,000 KG at 1,200 UGX/KG must yield 6,000,000 UGX");
+
+  // 3. 20 MT @ 1,200,000 UGX/MT = 20 * 1,200,000 = UGX 24,000,000
+  const gross3 = calculateGrossRevenue(20, 1200000, "MT", "UGX/MT");
+  assert.strictEqual(gross3, 24000000, "20 MT at 1,200,000 UGX/MT must yield 24,000,000 UGX");
+
+  // 4. Zero volume or zero price returns 0
+  assert.strictEqual(calculateGrossRevenue(0, 1150), 0, "Zero volume yields 0 revenue");
+  assert.strictEqual(calculateGrossRevenue(30, 0), 0, "Zero price yields 0 revenue");
+
+  // 5. Missing values return null
+  assert.strictEqual(calculateGrossRevenue(null, 1150), null, "Missing volume returns null");
+  assert.strictEqual(calculateGrossRevenue("", 1150), null, "Empty volume returns null");
+  assert.strictEqual(calculateGrossRevenue(30, null), null, "Missing price returns null");
+
+  // 6. Negative values rejected
+  assert.strictEqual(calculateGrossRevenue(-10, 1150), null, "Negative volume returns null");
+  assert.strictEqual(calculateGrossRevenue(30, -500), null, "Negative price returns null");
+});
+
+runTest("TEST-26", "Deal Decision Matrix v1 - Total Costs with explicit Handling COGS cost basis", () => {
+  // 1. Flat TOTAL cost basis: Transport 750,000 + Handling 150,000 = 900,000 UGX
+  const costTotal = calculateTotalCosts(750000, 150000, 30, HANDLING_BASIS.TOTAL, "MT");
+  assert.strictEqual(costTotal, 900000, "Flat handling adds directly to transport");
+
+  // 2. PER_MT cost basis: Transport 750,000 + (30 MT * 10,000 UGX/MT) = 1,050,000 UGX
+  const costPerMT = calculateTotalCosts(750000, 10000, 30, HANDLING_BASIS.PER_MT, "MT");
+  assert.strictEqual(costPerMT, 1050000, "Per-MT handling multiplies by volume in MT");
+
+  // 3. PER_KG cost basis: Transport 750,000 + (30,000 KG * 20 UGX/KG) = 1,350,000 UGX
+  const costPerKG = calculateTotalCosts(750000, 20, 30, HANDLING_BASIS.PER_KG, "MT");
+  assert.strictEqual(costPerKG, 1350000, "Per-KG handling multiplies by volume in KG");
+
+  // 4. Handling missing values safely: only transport provided
+  const costTransportOnly = calculateTotalCosts(750000, null, 30);
+  assert.strictEqual(costTransportOnly, 750000, "Missing handling defaults to 0");
+
+  // 5. Handling missing values safely: only handling provided
+  const costHandlingOnly = calculateTotalCosts(null, 150000, 30);
+  assert.strictEqual(costHandlingOnly, 150000, "Missing transport defaults to 0");
+
+  // 6. Negative costs rejected
+  assert.strictEqual(calculateTotalCosts(-50000, 150000), null, "Negative transport returns null");
+  assert.strictEqual(calculateTotalCosts(750000, -20000), null, "Negative handling returns null");
+});
+
+runTest("TEST-27", "Deal Decision Matrix v1 - Net Margin and Margin Percentage (guarded against division by zero)", () => {
+  // 1. Standard positive margin
+  const net1 = calculateNetMargin(34500000, 900000);
+  assert.strictEqual(net1, 33600000);
+  const pct1 = calculateMarginPercentage(net1, 34500000);
+  assert.strictEqual(pct1, 97.39, "33.6M / 34.5M = 97.39%");
+
+  // 2. Realistic commodity margin: 34.5M revenue, 30M costs = 4.5M margin
+  const net2 = calculateNetMargin(34500000, 30000000);
+  assert.strictEqual(net2, 4500000);
+  const pct2 = calculateMarginPercentage(net2, 34500000);
+  assert.strictEqual(pct2, 13.04, "4.5M / 34.5M = 13.04%");
+
+  // 3. Negative margin (loss): 10M revenue, 12M costs = -2M margin
+  const net3 = calculateNetMargin(10000000, 12000000);
+  assert.strictEqual(net3, -2000000);
+  const pct3 = calculateMarginPercentage(net3, 10000000);
+  assert.strictEqual(pct3, -20.0, "-2M / 10M = -20.00%");
+
+  // 4. Zero / missing revenue: must return null, NEVER Infinity or NaN
+  assert.strictEqual(calculateMarginPercentage(500000, 0), null, "Zero revenue must return null");
+  assert.strictEqual(calculateMarginPercentage(500000, null), null, "Null revenue must return null");
+  assert.strictEqual(calculateMarginPercentage(null, 1000000), null, "Null margin must return null");
+  assert.strictEqual(calculateMarginPercentage(-500000, 0), null, "Negative margin with zero revenue must return null");
+});
+
+runTest("TEST-28", "Deal Decision Matrix v1 - Validation engine strictly validates required and numeric constraints", () => {
+  // 1. Missing commodity
+  const v1 = validateMatrixInputs({ commodity: "", volume: 10, basePrice: 1000 });
+  assert.strictEqual(v1.isValid, false);
+  assert.ok(v1.errors.commodity, "Missing commodity must trigger error");
+
+  // 2. Missing & invalid volume
+  const v2 = validateMatrixInputs({ commodity: "Maize", volume: "", basePrice: 1000 });
+  assert.strictEqual(v2.isValid, false);
+  assert.ok(v2.errors.volume);
+
+  const v3 = validateMatrixInputs({ commodity: "Maize", volume: -5, basePrice: 1000 });
+  assert.strictEqual(v3.isValid, false);
+  assert.strictEqual(v3.errors.volume, "Volume cannot be negative.");
+
+  const v4 = validateMatrixInputs({ commodity: "Maize", volume: 0, basePrice: 1000 });
+  assert.strictEqual(v4.isValid, false);
+  assert.strictEqual(v4.errors.volume, "Volume must be greater than zero.");
+
+  // 3. Missing & invalid base price
+  const v5 = validateMatrixInputs({ commodity: "Maize", volume: 10, basePrice: -500 });
+  assert.strictEqual(v5.isValid, false);
+  assert.strictEqual(v5.errors.basePrice, "Base price cannot be negative.");
+
+  // 4. Negative optional costs
+  const v6 = validateMatrixInputs({ commodity: "Maize", volume: 10, basePrice: 1000, transportCost: -5000 });
+  assert.strictEqual(v6.isValid, false);
+  assert.ok(v6.errors.transportCost);
+
+  // 5. Valid full payload
+  const v7 = validateMatrixInputs({
+    commodity: "Maize",
+    volume: "30",
+    basePrice: "1150",
+    transportCost: "750000",
+    handlingCogs: "150000",
+  });
+  assert.strictEqual(v7.isValid, true);
+  assert.strictEqual(Object.keys(v7.errors).length, 0);
+});
+
+runTest("TEST-29", "Deal Decision Matrix v1 - Full evaluateDealMatrix pipeline with commercial statuses", () => {
+  // Viable/Strong margin case
+  const res1 = evaluateDealMatrix({
+    commodity: "Maize",
+    volume: "30",
+    volumeUnit: "MT",
+    basePrice: "1150",
+    priceUnit: "UGX/KG",
+    transportCost: "750000",
+    handlingCogs: "150000",
+    handlingBasis: HANDLING_BASIS.TOTAL,
+  });
+  assert.strictEqual(res1.grossRevenue, 34500000);
+  assert.strictEqual(res1.totalCosts, 900000);
+  assert.strictEqual(res1.netMargin, 33600000);
+  assert.strictEqual(res1.commercialStatus, "STRONG_MARGIN");
+  assert.strictEqual(res1.isComplete, true);
+
+  // Negative margin case
+  const res2 = evaluateDealMatrix({
+    commodity: "Beans",
+    volume: "10",
+    volumeUnit: "MT",
+    basePrice: "2000",
+    priceUnit: "UGX/KG", // Gross = 20,000,000
+    transportCost: "18000000",
+    handlingCogs: "3000000", // Total costs = 21,000,000
+    handlingBasis: HANDLING_BASIS.TOTAL,
+  });
+  assert.strictEqual(res2.grossRevenue, 20000000);
+  assert.strictEqual(res2.totalCosts, 21000000);
+  assert.strictEqual(res2.netMargin, -1000000);
+  assert.strictEqual(res2.commercialStatus, "NEGATIVE_MARGIN");
+
+  // Incomplete / Missing inputs case
+  const res3 = evaluateDealMatrix({
+    commodity: "Soybeans",
+    volume: "15",
+    basePrice: "", // Missing price
+  });
+  assert.strictEqual(res3.grossRevenue, null);
+  assert.strictEqual(res3.commercialStatus, "INCOMPLETE");
+  assert.strictEqual(res3.isComplete, false);
+});
+
+runTest("TEST-30", "Deal Decision Matrix v1 - Currency and Percentage formatting handles negative signs correctly", () => {
+  assert.strictEqual(formatCurrency(34500000), "UGX 34,500,000");
+  assert.strictEqual(formatCurrency(-2000000), "-UGX 2,000,000");
+  assert.strictEqual(formatCurrency(0), "UGX 0");
+  assert.strictEqual(formatCurrency(null), "—");
+
+  assert.strictEqual(formatPercentage(13.04), "+13.04%");
+  assert.strictEqual(formatPercentage(-5.5), "-5.50%");
+  assert.strictEqual(formatPercentage(0), "0.00%");
+  assert.strictEqual(formatPercentage(null), "—");
+});
+
+runTest("TEST-31", "Deal Decision Matrix v1 - Offline Store persists matrix deals and computes stats", async () => {
+  // Reference generation
+  const ref = generateMatrixReference();
+  assert.ok(ref.startsWith("MAT-"), "Reference must start with MAT- prefix");
+
+  // Save new matrix record
+  const saved = await saveMatrixRecord({
+    reference: ref,
+    commodity: "Sorghum",
+    volume: 25,
+    volume_unit: "MT",
+    base_price: 1300,
+    price_unit: "UGX/KG",
+    transport_cost: 600000,
+    handling_cogs: 100000,
+    status: "Draft",
+    buyer_name: "Northern Breweries Ltd",
+    district: "Lira",
+  });
+  assert.ok(saved.client_id, "Saved record must have client_id");
+  assert.strictEqual(saved.commodity, "Sorghum");
+
+  // Retrieve all records
+  const all = await getAllMatrixRecords();
+  assert.ok(all.length >= 3, "Must contain at least 2 seed benchmark deals + newly saved deal");
+  const found = all.find((r) => r.reference === ref);
+  assert.ok(found, "Saved record must be retrievable from offline store");
+
+  // Stats calculation
+  const stats = await getMatrixStats();
+  assert.ok(stats.total >= 3, "Total stats count must match");
+  assert.ok(typeof stats.positiveMargin === "number");
+  assert.ok(typeof stats.drafts === "number");
+});
+
 // ==============================================================================
 // SUMMARY
 // ==============================================================================
+await testQueue;
 
 console.log("\n================================================================================");
 console.log(`  FINAL TEST SUMMARY: ${passedCount} PASSED | ${failedCount} FAILED | 0 SKIPPED`);
