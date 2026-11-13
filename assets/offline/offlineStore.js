@@ -623,5 +623,6 @@ export async function getMatrixStats() {
     positiveMargin: records.filter((r) => r.net_margin !== null && r.net_margin > 0).length,
     negativeMargin: records.filter((r) => r.net_margin !== null && r.net_margin < 0).length,
     incomplete: records.filter((r) => r.gross_revenue === null || r.net_margin === null).length,
+    ready: records.filter((r) => r.ready_status === "READY" || r.status === "Approved" || r.status === "Ready").length,
   };
 }

@@ -107,5 +107,22 @@ if (hasErrors) {
   console.error("\n>>> BUILD INTEGRITY CHECK FAILED");
   process.exit(1);
 } else {
+  // 5. Generate Environment Config for Browser Runtime
+  console.log("\nGenerating browser runtime environment configuration...");
+  let supabaseUrl = process.env.VITE_SUPABASE_URL || "";
+  let supabaseAnonKey = process.env.VITE_SUPABASE_ANON_KEY || "";
+
+  if (!supabaseUrl && fs.existsSync(path.join(root, ".env"))) {
+    const envContent = fs.readFileSync(path.join(root, ".env"), "utf8");
+    const urlMatch = envContent.match(/VITE_SUPABASE_URL\s*=\s*([^\r\n]+)/);
+    const keyMatch = envContent.match(/VITE_SUPABASE_ANON_KEY\s*=\s*([^\r\n]+)/);
+    if (urlMatch) supabaseUrl = urlMatch[1].trim();
+    if (keyMatch) supabaseAnonKey = keyMatch[1].trim();
+  }
+
+  const envConfigContent = `// Auto-generated runtime environment configuration\nwindow.__ENV__ = Object.assign(window.__ENV__ || {}, {\n  VITE_SUPABASE_URL: "${supabaseUrl || "https://ktbmxjakzkopijdzkxlo.supabase.co"}",\n  VITE_SUPABASE_ANON_KEY: "${supabaseAnonKey || "sb_publishable_ffsFhgLkKV1IGGEJKGV-2w_b9xRTZ1H"}"\n});\n`;
+  fs.writeFileSync(path.join(root, "assets/env-config.js"), envConfigContent, "utf8");
+  console.log("[PASS] Browser runtime environment configuration written to assets/env-config.js");
+
   console.log("\n>>> BUILD INTEGRITY CHECK PASSED (100% production ready)");
 }

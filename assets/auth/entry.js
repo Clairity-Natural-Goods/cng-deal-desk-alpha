@@ -8,7 +8,6 @@ import {
 } from "./authContext.js";
 import { renderLoginPage } from "./LoginPage.js";
 import { renderRegisterPage } from "./RegisterPage.js";
-import { createLogoutButton } from "./LogoutButton.js";
 import { requireAuthenticatedUser } from "./ProtectedRoute.js";
 import { createSupabaseDatabaseAdapter } from "../supabaseRepository.js";
 import { checkMigrationNeeded, migrateLocalStorageToSupabase } from "../migrationUtility.js";
@@ -16,7 +15,6 @@ import { checkMigrationNeeded, migrateLocalStorageToSupabase } from "../migratio
 const ROOT_ID = "root";
 const AUTH_ID = "cng-auth-root";
 const AUTH_PATHS = new Set(["/login", "/register", "/logout"]);
-let logoutButton;
 let reactAppPromise = null;
 
 // Ensure the React application bundle is loaded
@@ -56,9 +54,9 @@ function installSupabaseAdapter() {
 function addStyles() {
   const style = document.createElement("style");
   style.textContent = `
-    #${AUTH_ID} { position: fixed; inset: 0; z-index: 2147483000; display: grid; place-items: center; overflow: auto; padding: 24px; background: #f8fafc; color: #0f172a; font: 14px/1.5 system-ui, -apple-system, sans-serif; }
+    #${AUTH_ID} { position: fixed; inset: 0; z-index: 2147483000; display: grid; place-items: center; overflow: auto; padding: 24px; background: #f8fafc; color: #0f172a; font: 14px/1.5 system-ui, -apple-system, sans-serif; transition: background-color 0.2s ease, color 0.2s ease; }
     #${AUTH_ID}[hidden] { display: none; }
-    #${AUTH_ID} .auth-card { box-sizing: border-box; width: min(100%, 440px); padding: 32px; border: 1px solid #e2e8f0; border-radius: 16px; background: white; box-shadow: 0 16px 48px #0f172a14; }
+    #${AUTH_ID} .auth-card { box-sizing: border-box; width: min(100%, 440px); padding: 32px; border: 1px solid #e2e8f0; border-radius: 16px; background: white; box-shadow: 0 16px 48px #0f172a14; transition: background-color 0.2s ease, border-color 0.2s ease; }
     #${AUTH_ID} .auth-brand { color: #047857; font-size: 13px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; }
     #${AUTH_ID} h1 { margin: 14px 0 4px; font-size: 26px; font-weight: 700; line-height: 1.2; letter-spacing: -0.02em; }
     #${AUTH_ID} .auth-subtitle, #${AUTH_ID} .auth-switch { color: #64748b; font-size: 13.5px; }
@@ -69,7 +67,7 @@ function addStyles() {
     #${AUTH_ID} .auth-toggle-password { position: absolute; right: 8px; top: 50%; transform: translateY(-50%); background: none; border: none; padding: 4px; cursor: pointer; color: #64748b; display: flex; align-items: center; justify-content: center; border-radius: 6px; transition: color 0.15s ease, background-color 0.15s ease; }
     #${AUTH_ID} .auth-toggle-password:hover { color: #047857; background: #f1f5f9; }
     #${AUTH_ID} .auth-toggle-password:focus-visible { outline: 2px solid #047857; outline-offset: 1px; }
-    #${AUTH_ID} input, #${AUTH_ID} select { box-sizing: border-box; width: 100%; min-height: 42px; padding: 9px 12px; border: 1px solid #cbd5e1; border-radius: 8px; background: white; color: #0f172a; font: inherit; }
+    #${AUTH_ID} input, #${AUTH_ID} select { box-sizing: border-box; width: 100%; min-height: 42px; padding: 9px 12px; border: 1px solid #cbd5e1; border-radius: 8px; background: white; color: #0f172a; font: inherit; transition: border-color 0.15s ease, background-color 0.15s ease; }
     #${AUTH_ID} input:focus, #${AUTH_ID} select:focus { outline: 2px solid #047857; outline-offset: 1px; }
     #${AUTH_ID} .auth-hint { margin: -6px 0 0; color: #64748b; font-size: 12px; }
     #${AUTH_ID} .auth-error { min-height: 20px; margin: 0; color: #b91c1c; font-size: 13px; font-weight: 500; }
@@ -78,8 +76,14 @@ function addStyles() {
     #${AUTH_ID} .auth-submit:disabled { cursor: wait; opacity: .7; }
     #${AUTH_ID} .auth-switch { margin: 20px 0 0; text-align: center; }
     #${AUTH_ID} a { color: #047857; font-weight: 600; }
-    .auth-logout { position: fixed; right: 18px; bottom: 18px; z-index: 2147482000; border: 1px solid #cbd5e1; border-radius: 999px; padding: 9px 16px; background: white; color: #0f172a; box-shadow: 0 4px 16px #0f172a20; font: 600 13px system-ui, sans-serif; cursor: pointer; }
-    .auth-logout:hover { background: #f8fafc; }
+    
+    /* Dark Theme Support */
+    html.dark #${AUTH_ID}, [data-theme="dark"] #${AUTH_ID} { background: #07150e; color: #f1f5f9; }
+    html.dark #${AUTH_ID} .auth-card, [data-theme="dark"] #${AUTH_ID} .auth-card { background: #0c2016; border-color: #1a3d2c; box-shadow: 0 16px 48px #00000060; }
+    html.dark #${AUTH_ID} input, html.dark #${AUTH_ID} select, [data-theme="dark"] #${AUTH_ID} input, [data-theme="dark"] #${AUTH_ID} select { background: #081710; border-color: #1a3d2c; color: #f8fafc; }
+    html.dark #${AUTH_ID} label, [data-theme="dark"] #${AUTH_ID} label { color: #94a3b8; }
+    html.dark #${AUTH_ID} .auth-subtitle, html.dark #${AUTH_ID} .auth-switch, [data-theme="dark"] #${AUTH_ID} .auth-subtitle, [data-theme="dark"] #${AUTH_ID} .auth-switch { color: #64748b; }
+    html.dark #${AUTH_ID} .auth-toggle-password:hover, [data-theme="dark"] #${AUTH_ID} .auth-toggle-password:hover { background: #132e21; color: #34d399; }
   `;
   document.head.append(style);
 }
@@ -139,10 +143,6 @@ async function renderCurrentPath() {
   const authRoot = document.getElementById(AUTH_ID);
   const user = await fetchCurrentSessionUser();
   const loggedIn = Boolean(user);
-
-  if (logoutButton) {
-    logoutButton.hidden = !loggedIn;
-  }
 
   if (path === "/logout") {
     await logout();
@@ -207,14 +207,6 @@ async function initialize() {
   authRoot.hidden = true;
   document.body.append(authRoot);
   addStyles();
-
-  // Create logout button
-  logoutButton = createLogoutButton(async () => {
-    await logout();
-    window.location.replace("/login");
-  });
-  logoutButton.hidden = true;
-  document.body.append(logoutButton);
 
   window.addEventListener("popstate", renderCurrentPath);
 

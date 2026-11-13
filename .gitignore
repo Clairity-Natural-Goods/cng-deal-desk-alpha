@@ -12,13 +12,18 @@ node_modules/
 .env
 .env.local
 .env.*.local
+assets/env-config.js
 
 # Build outputs
 dist/
 build/
 .output/
 
-# Scratch and temporary directories
+# Supabase CLI temp files
+supabase/.temp/
+
+# Editor & Scratch and temporary directories
+.kilo/
 scratch/
 .system_generated/
 .DS_Store
@@ -30,4 +35,3 @@ Thumbs.db
 *.njsproj
 *.sln
 *.sw?
-

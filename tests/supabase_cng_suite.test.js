@@ -54,6 +54,15 @@ import {
   validateMatrixInputs,
   formatCurrency,
   formatPercentage,
+  calculateHandlingCost,
+  calculateDeliveredCostDetailed,
+  calculateBuyerDeliveredCoverage,
+  calculateCngServiceEconomics,
+  evaluateReadyReadiness,
+  classifyCostInput,
+  COST_STATUS,
+  COVERAGE_STATUS,
+  FEE_ACCEPTANCE,
 } from "../assets/matrix/financialEngine.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -777,6 +786,319 @@ runTest("TEST-31", "Deal Decision Matrix v1 - Offline Store persists matrix deal
   assert.ok(stats.total >= 3, "Total stats count must match");
   assert.ok(typeof stats.positiveMargin === "number");
   assert.ok(typeof stats.drafts === "number");
+});
+
+// ==============================================================================
+// 6. ENHANCED FINANCIAL CONTROLS, COVERAGE & READY GATING (MATRIX V1)
+// ==============================================================================
+
+runTest("TEST-32", "Handling COGS Basis - Total, Per-MT, and Per-KG conversion parity", () => {
+  // 10 MT transaction benchmark:
+  // TOTAL: Flat UGX 500,000
+  const hTotal = calculateHandlingCost(500000, HANDLING_BASIS.TOTAL, 10, "MT");
+  assert.strictEqual(hTotal, 500000, "TOTAL basis must return entered amount");
+
+  // PER_MT: UGX 50,000 / MT × 10 MT = UGX 500,000
+  const hMt = calculateHandlingCost(50000, HANDLING_BASIS.PER_MT, 10, "MT");
+  assert.strictEqual(hMt, 500000, "PER_MT basis must multiply rate by MT");
+
+  // PER_KG: UGX 50 / KG × 10,000 KG = UGX 500,000
+  const hKg = calculateHandlingCost(50, HANDLING_BASIS.PER_KG, 10, "MT");
+  assert.strictEqual(hKg, 500000, "PER_KG basis must multiply rate by KG");
+
+  // Parity confirmation across all 3 bases
+  assert.strictEqual(hTotal, hMt);
+  assert.strictEqual(hMt, hKg);
+
+  // Decimal volume test: 12.5 MT @ UGX 40,000/MT = UGX 500,000
+  const hDec = calculateHandlingCost(40000, HANDLING_BASIS.PER_MT, 12.5, "MT");
+  assert.strictEqual(hDec, 500000, "Decimal volume must calculate correctly");
+
+  // KG input volume: 15,000 KG @ UGX 30,000/MT = UGX 450,000
+  const hKgVol = calculateHandlingCost(30000, HANDLING_BASIS.PER_MT, 15000, "KG");
+  assert.strictEqual(hKgVol, 450000, "Volume in KG converted to MT correctly");
+});
+
+runTest("TEST-33", "Missing Cost Defense - Distinguishes unentered costs from confirmed zeros", () => {
+  // 1. Unentered costs
+  assert.strictEqual(classifyCostInput(null).status, COST_STATUS.NOT_ENTERED);
+  assert.strictEqual(classifyCostInput("").status, COST_STATUS.NOT_ENTERED);
+  assert.strictEqual(classifyCostInput(undefined).status, COST_STATUS.NOT_ENTERED);
+
+  // 2. Explicit zero
+  const zeroCls = classifyCostInput(0);
+  assert.strictEqual(zeroCls.status, COST_STATUS.EXPLICIT_ZERO);
+  assert.strictEqual(zeroCls.isZero, true);
+  assert.strictEqual(zeroCls.isMissing, false);
+
+  // 3. Valid positive
+  const posCls = classifyCostInput("750000");
+  assert.strictEqual(posCls.status, COST_STATUS.VALID_POSITIVE);
+  assert.strictEqual(posCls.value, 750000);
+
+  // 4. Invalid negative
+  assert.strictEqual(classifyCostInput(-500).status, COST_STATUS.INVALID);
+
+  // 5. Detailed cost calculation with missing fields
+  const missingRes = calculateDeliveredCostDetailed({
+    commodityCost: 20000000,
+    transportCost: null, // Missing!
+    handlingCogs: 500000,
+    requireAllCosts: true,
+  });
+  assert.strictEqual(missingRes.isComplete, false, "Missing transport must mark cost incomplete");
+  assert.ok(missingRes.missingFields.includes("Transport Cost"));
+  assert.strictEqual(missingRes.deliveredCost, null, "Delivered cost must not be calculated when required costs are missing");
+
+  // 6. Confirmed zero transport cost succeeds
+  const zeroTransportRes = calculateDeliveredCostDetailed({
+    commodityCost: 20000000,
+    transportCost: 0, // Explicitly confirmed 0 (buyer collects)
+    handlingCogs: 500000,
+    requireAllCosts: true,
+  });
+  assert.strictEqual(zeroTransportRes.isComplete, true);
+  assert.strictEqual(zeroTransportRes.deliveredCost, 20500000);
+});
+
+runTest("TEST-34", "Buyer Delivered-Cost Coverage - Computes difference, percentage, and coverage state", () => {
+  // Case A: COVERED — Buyer 35M vs Delivered Cost 30M (Difference +5M, 116.67%)
+  const covA = calculateBuyerDeliveredCoverage({
+    volume: 25,
+    volumeUnit: "MT",
+    buyerPricePerKg: 1400, // 25,000 KG × 1400 = 35,000,000
+    isBuyerAgreed: true,
+    commodityCost: 27500000,
+    transportCost: 1500000,
+    handlingCogs: 1000000,
+  });
+  assert.strictEqual(covA.status, COVERAGE_STATUS.COVERED);
+  assert.strictEqual(covA.buyerAmount, 35000000);
+  assert.strictEqual(covA.deliveredCost, 30000000);
+  assert.strictEqual(covA.difference, 5000000);
+  assert.strictEqual(covA.coveragePercentage, 116.67);
+  assert.strictEqual(covA.isCovered, true);
+
+  // Case B: NOT COVERED — Buyer 28M vs Delivered Cost 30M (Difference -2M, 93.33%)
+  const covB = calculateBuyerDeliveredCoverage({
+    volume: 25,
+    volumeUnit: "MT",
+    buyerPricePerKg: 1120, // 25,000 KG × 1120 = 28,000,000
+    isBuyerAgreed: true,
+    commodityCost: 27500000,
+    transportCost: 1500000,
+    handlingCogs: 1000000,
+  });
+  assert.strictEqual(covB.status, COVERAGE_STATUS.NOT_COVERED);
+  assert.strictEqual(covB.difference, -2000000);
+  assert.strictEqual(covB.coveragePercentage, 93.33);
+  assert.strictEqual(covB.isCovered, false);
+
+  // Case C: INCOMPLETE COSTS — Missing transport cost
+  const covC = calculateBuyerDeliveredCoverage({
+    volume: 25,
+    buyerPricePerKg: 1400,
+    commodityCost: 27500000,
+    transportCost: null, // Missing!
+    handlingCogs: 1000000,
+  });
+  assert.strictEqual(covC.status, COVERAGE_STATUS.INCOMPLETE_COSTS);
+  assert.strictEqual(covC.isCovered, false);
+  assert.ok(covC.missingFields.includes("Transport Cost"));
+
+  // Case D: AWAITING BUYER TERMS — Buyer price missing
+  const covD = calculateBuyerDeliveredCoverage({
+    volume: 25,
+    buyerPricePerKg: null, // Not yet entered
+    commodityCost: 27500000,
+    transportCost: 1500000,
+    handlingCogs: 1000000,
+  });
+  assert.strictEqual(covD.status, COVERAGE_STATUS.AWAITING_BUYER_TERMS);
+  assert.strictEqual(covD.isCovered, false);
+});
+
+runTest("TEST-35", "CNG Service Economics - Separates proposed, accepted, and retained contribution", () => {
+  const fees = [
+    {
+      id: "fee_desk_1",
+      category: "Desk Verification & Gating",
+      amount: 600000,
+      payer: "Buyer",
+      acceptanceStatus: FEE_ACCEPTANCE.ACCEPTED,
+      acceptanceEvidence: "PO #88 signed by buyer procurement officer",
+    },
+    {
+      id: "fee_assay_1",
+      category: "Quality Assay & Moisture Testing",
+      amount: 250000,
+      payer: "Supplier",
+      acceptanceStatus: FEE_ACCEPTANCE.ACCEPTED,
+      acceptanceEvidence: "Inspection protocol agreement signed on site",
+    },
+    {
+      id: "fee_orig_1",
+      category: "Corridor Trade Origination",
+      amount: 400000,
+      payer: "Buyer",
+      acceptanceStatus: FEE_ACCEPTANCE.PROPOSED, // Proposed only! Must be excluded from earned revenue
+      acceptanceEvidence: "",
+    },
+    {
+      id: "fee_assay_1", // Duplicate ID attempt! Must not be counted twice
+      category: "Quality Assay Duplicate",
+      amount: 250000,
+      acceptanceStatus: FEE_ACCEPTANCE.ACCEPTED,
+      acceptanceEvidence: "Duplicate attempt",
+    },
+  ];
+
+  const serviceCosts = {
+    costField: 80000,
+    costTesting: 45000,
+    staffHours: 6,
+    staffCostPerHour: 6000, // 36,000 staff cost
+    costOther: 20000,
+    overheadPct: 15,
+  };
+
+  const econ = calculateCngServiceEconomics({ fees, serviceCosts });
+
+  // Proposed total: 600k + 250k + 400k + 250k = 1,500,000
+  assert.strictEqual(econ.proposedServiceFees, 1500000);
+
+  // Accepted total (excluding duplicate): 600k + 250k = 850,000
+  assert.strictEqual(econ.acceptedServiceFees, 850000);
+
+  // Earned revenue (accepted + has evidence + not duplicate): 600k + 250k = 850,000
+  assert.strictEqual(econ.earnedServiceRevenue, 850000);
+
+  // Direct costs: 80k + 45k + 36k + 20k = 181,000
+  assert.strictEqual(econ.directServiceCosts, 181000);
+
+  // 15% Overhead on earned revenue: 850k × 0.15 = 127,500
+  assert.strictEqual(econ.overheadAmount, 127500);
+
+  // Total CNG costs: 181,000 + 127,500 = 308,500
+  assert.strictEqual(econ.totalCngServiceCosts, 308500);
+
+  // Retained contribution: 850,000 - 308,500 = 541,500
+  assert.strictEqual(econ.retainedContribution, 541500);
+  assert.strictEqual(econ.isRetainedPositive, true);
+  assert.strictEqual(econ.hasUnacceptedFees, true);
+});
+
+runTest("TEST-36", "READY Status 10-Point Readiness - Evaluates multi-condition gating and blocks non-compliant deals", () => {
+  // Case A: Fully compliant deal passes to READY
+  const readyDeal = {
+    volume: 30,
+    basePrice: 1200,
+    transportCost: 750000,
+    handlingCogs: 150000,
+    netMargin: 3500000, // Positive contribution
+    buyerTermsEvidenced: true,
+    supplierVerified: true,
+    logisticsWorkable: true,
+    paymentApproved: true,
+    feeAcceptanceDocumented: true,
+    lane: "Gulu - Lira Corridor",
+    userRole: "admin",
+  };
+  const resA = evaluateReadyReadiness(readyDeal);
+  assert.strictEqual(resA.isReady, true);
+  assert.strictEqual(resA.status, "READY");
+  assert.strictEqual(resA.blockers.length, 0);
+  assert.strictEqual(resA.checklist.length, 10);
+
+  // Case B: Negative margin blocked even with lane selected
+  const lossDeal = {
+    ...readyDeal,
+    netMargin: -500000,
+  };
+  const resB = evaluateReadyReadiness(lossDeal);
+  assert.strictEqual(resB.isReady, false);
+  assert.strictEqual(resB.status, "BLOCKED");
+  assert.ok(resB.blockers.some((b) => b.includes("positive")));
+
+  // Case C: Missing transport cost blocked
+  const missingCostDeal = {
+    ...readyDeal,
+    transportCost: "",
+  };
+  const resC = evaluateReadyReadiness(missingCostDeal);
+  assert.strictEqual(resC.isReady, false);
+  assert.ok(resC.blockers.some((b) => b.includes("Transport Cost")));
+
+  // Case D: Missing buyer terms evidence blocked
+  const noBuyerTermsDeal = {
+    ...readyDeal,
+    buyerTermsEvidenced: false,
+  };
+  const resD = evaluateReadyReadiness(noBuyerTermsDeal);
+  assert.strictEqual(resD.isReady, false);
+  assert.ok(resD.blockers.some((b) => b.includes("Buyer agreed terms")));
+
+  // Case E: Unprivileged viewer role blocked from approval
+  const viewerDeal = {
+    ...readyDeal,
+    userRole: "viewer",
+  };
+  const resE = evaluateReadyReadiness(viewerDeal);
+  assert.strictEqual(resE.isReady, false);
+  assert.ok(resE.blockers.some((b) => b.includes("authorization")));
+});
+
+runTest("TEST-37", "Enhanced evaluateDealMatrix - Combines buyer coverage, CNG economics, and readiness metadata", () => {
+  const result = evaluateDealMatrix({
+    commodity: "Maize",
+    volume: "20",
+    volumeUnit: "MT",
+    basePrice: "1300",
+    transportCost: "600000",
+    handlingCogs: "200000",
+    handlingBasis: HANDLING_BASIS.TOTAL,
+    buyerPricePerKg: "1450", // Buyer agrees at 1450 UGX/KG = 29,000,000
+    isBuyerAgreed: true,
+    serviceFees: [
+      {
+        id: "fee_1",
+        category: "Desk Verification & Gating",
+        amount: 500000,
+        acceptanceStatus: FEE_ACCEPTANCE.ACCEPTED,
+        acceptanceEvidence: "PO clearance signed",
+      },
+    ],
+    serviceOperatingCosts: {
+      costField: 50000,
+      costTesting: 30000,
+      staffHours: 4,
+      staffCostPerHour: 6000,
+      overheadPct: 15,
+    },
+    lane: "Amuru - Gulu Lane",
+    userRole: "admin",
+  });
+
+  // Core metrics
+  assert.strictEqual(result.grossRevenue, 26000000);
+  assert.strictEqual(result.totalCosts, 800000);
+  assert.strictEqual(result.netMargin, 25200000);
+  assert.strictEqual(result.commercialStatus, "STRONG_MARGIN");
+
+  // Buyer coverage checks
+  assert.ok(result.buyerCoverage);
+  assert.strictEqual(result.buyerCoverage.status, COVERAGE_STATUS.COVERED);
+  assert.strictEqual(result.buyerCoverage.buyerAmount, 29000000);
+  assert.strictEqual(result.buyerCoverage.isCovered, true);
+
+  // CNG Service economics checks
+  assert.ok(result.serviceEconomics);
+  assert.strictEqual(result.serviceEconomics.earnedServiceRevenue, 500000);
+  assert.ok(result.serviceEconomics.retainedContribution > 0);
+
+  // Ready readiness checks
+  assert.ok(result.readyReadiness);
+  assert.strictEqual(result.readyReadiness.status, "READY");
 });
 
 // ==============================================================================

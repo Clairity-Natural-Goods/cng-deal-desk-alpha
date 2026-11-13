@@ -1,12 +1,18 @@
 import { createClient } from "./supabase.js";
 
+const env = (typeof window !== "undefined" && window.__ENV__) || {};
+
 export const SUPABASE_URL =
   (typeof import.meta !== "undefined" && import.meta.env?.VITE_SUPABASE_URL) ||
-  "https://kwivtzoimfvnhovrdrcz.supabase.co";
+  env.VITE_SUPABASE_URL ||
+  (typeof process !== "undefined" && process.env?.VITE_SUPABASE_URL) ||
+  "https://ktbmxjakzkopijdzkxlo.supabase.co";
 
 export const SUPABASE_ANON_KEY =
   (typeof import.meta !== "undefined" && import.meta.env?.VITE_SUPABASE_ANON_KEY) ||
-  "sb_publishable_mjzEppyM3rRgj8zpTVCLSA_LHiChrv2";
+  env.VITE_SUPABASE_ANON_KEY ||
+  (typeof process !== "undefined" && process.env?.VITE_SUPABASE_ANON_KEY) ||
+  "sb_publishable_ffsFhgLkKV1IGGEJKGV-2w_b9xRTZ1H";
 
 export const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
   auth: {
@@ -16,4 +22,3 @@ export const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
     storageKey: "cng_supabase_auth_token",
   },
 });
-

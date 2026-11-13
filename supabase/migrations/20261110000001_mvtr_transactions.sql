@@ -295,8 +295,8 @@ INSERT INTO public.transactions (
   'TXN-20261110-001',
   'Field Officer Ocen',
   'Approved',
-  'rec_b01cng01',
-  'rec_s01cng01',
+  'p5',
+  'p2',
   'Maize',
   '{
     "buyer_name": "Gulu Grain Millers Ltd",
