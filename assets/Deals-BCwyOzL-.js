@@ -107,7 +107,7 @@ function DealsPage() {
         staff_cost_per_hour: 6000,
         working_days: 0,
         approval_status: "Not requested",
-        payment_status: "PENDING",
+        payment_status: "Not invoiced",
         classification: "Not classified",
       });
 

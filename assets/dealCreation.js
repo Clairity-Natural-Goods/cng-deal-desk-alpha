@@ -8,6 +8,15 @@
  * ==============================================================================
  */
 
+const VALID_DEAL_PAYMENT_STATUSES = [
+  "Not invoiced",
+  "Invoiced",
+  "Reported paid",
+  "Verified paid",
+  "Waived",
+  "Written off",
+];
+
 /**
  * Normalizes and validates deal creation payload before database insertion.
  * 
@@ -25,7 +34,7 @@
  * - per_tonne_fee: 30000
  * - minimum_fee: 25000
  * - approval_status: 'Not requested'
- * - payment_status: 'PENDING'
+ * - payment_status: 'Not invoiced' (satisfies PostgreSQL deals_payment_status_check)
  */
 export function normalizeDealCreationPayload(payload = {}) {
   const name = String(payload.name ?? "").trim();
@@ -76,7 +85,9 @@ export function normalizeDealCreationPayload(payload = {}) {
     staff_cost_per_hour: typeof payload.staff_cost_per_hour === "number" ? payload.staff_cost_per_hour : 6000,
     working_days: typeof payload.working_days === "number" ? payload.working_days : 0,
     approval_status: payload.approval_status || "Not requested",
-    payment_status: payload.payment_status || "PENDING",
+    payment_status: VALID_DEAL_PAYMENT_STATUSES.includes(payload.payment_status)
+      ? payload.payment_status
+      : "Not invoiced",
     classification: payload.classification || "Not classified",
     reconciled: Boolean(payload.reconciled),
   };

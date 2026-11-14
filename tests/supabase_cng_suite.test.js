@@ -266,6 +266,7 @@ runTest("TEST-12A", "Deal Creation - Normalizes quantity and an unselected buyer
   assert.strictEqual(deal.name, "Lira Miller Maize");
   assert.strictEqual(deal.proof_quantity_tonnes, 20.5);
   assert.strictEqual(deal.buyer_id, null, "Empty buyer_id must normalize to null for foreign key safety");
+  assert.strictEqual(deal.payment_status, "Not invoiced", "Payment status must satisfy deals_payment_status_check constraint");
 });
 
 runTest("TEST-12B", "Deal Creation - Rejects missing names and non-positive quantities", () => {
