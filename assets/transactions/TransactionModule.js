@@ -9,11 +9,13 @@
  */
 
 import { i as reactExport, l as toESM, r as jsxRuntime, t as cn } from "../utils-fF95r_SJ.js";
-import { syncEngine } from "../offline/syncEngine.js";
+import { syncEngine, saveTransactionToSupabase } from "../offline/syncEngine.js";
+import { supabase } from "../supabaseClient.js";
 import {
   saveOfflineTransaction,
   getOfflineTransaction,
   getAllOfflineTransactions,
+  markTransactionSynced,
   getOfflineStats,
   deleteOfflineTransaction,
 } from "../offline/offlineStore.js";
@@ -72,17 +74,30 @@ export default function TransactionModule() {
         setIsAdmin(user?.role === "admin" || user?.email?.toLowerCase().includes("clarence") || user?.username?.toLowerCase().includes("clarence"));
       }
 
-      // Load transactions from offline store (which mirrors cloud and survives hard refresh)
-      const localTx = await getAllOfflineTransactions();
-      if (localTx && localTx.length > 0) {
-        setTransactions(localTx);
+      // Fetch transactions directly from Supabase PostgreSQL database
+      let dbTransactions = [];
+      try {
+        const { data, error } = await supabase
+          .from("transactions")
+          .select("*")
+          .order("created_at", { ascending: false });
+
+        if (!error && Array.isArray(data)) {
+          dbTransactions = data;
+        }
+      } catch (cloudErr) {
+        console.warn("Direct cloud fetch notice:", cloudErr);
       }
 
-      // Reconcile with remote Supabase transactions if online
-      if (typeof navigator === "undefined" || navigator.onLine) {
-        const merged = await syncEngine.fetchCloudAndMerge();
-        setTransactions(merged);
+      if (dbTransactions.length > 0) {
+        setTransactions(dbTransactions);
+        for (const remote of dbTransactions) {
+          if (remote.client_id) {
+            await markTransactionSynced(remote.client_id, remote);
+          }
+        }
       } else {
+        const localTx = await getAllOfflineTransactions();
         setTransactions(localTx);
       }
 
@@ -306,7 +321,7 @@ export default function TransactionModule() {
     };
   };
 
-  // Save current record locally to IndexedDB
+  // Save current record directly to Supabase database (with offline resilience)
   const handleSaveDraft = async () => {
     if (!selectedTx) return;
     setIsSubmitting(true);
@@ -317,19 +332,23 @@ export default function TransactionModule() {
         ...selectedTx,
         fee_margin: updatedFeeMargin,
         decision_matrix: updatedMatrix,
-        status: selectedTx.status === "Approved" ? "Approved" : "FieldCaptured",
+        status: selectedTx.status === "Approved" ? "Approved" : "Draft",
         sync_status: "pending_sync",
       };
 
-      await saveOfflineTransaction(recordToSave, currentUser);
-      setSelectedTx(recordToSave);
-      showToast("Transaction saved locally in offline store. Queued for synchronization.", "success");
-      await refreshData();
-
-      // Trigger background sync if online
-      if (syncState.isOnline) {
-        syncEngine.syncPendingTransactions().then(() => refreshData()).catch(() => {});
+      try {
+        // Direct write to Supabase database
+        const savedServer = await saveTransactionToSupabase(recordToSave, currentUser);
+        setSelectedTx(savedServer);
+        showToast("Draft saved directly to Supabase PostgreSQL database.", "success");
+      } catch (dbErr) {
+        console.warn("Direct database write failed, saving to local offline store:", dbErr);
+        await saveOfflineTransaction(recordToSave, currentUser);
+        setSelectedTx(recordToSave);
+        showToast(`Saved offline (${dbErr.message}). Will sync when connected.`, "warning");
       }
+
+      await refreshData();
     } catch (err) {
       showToast(`Error saving draft: ${err.message}`, "error");
     } finally {
@@ -367,14 +386,18 @@ export default function TransactionModule() {
         sync_status: "pending_sync",
       };
 
-      await saveOfflineTransaction(recordToSave, currentUser);
-      setSelectedTx(recordToSave);
-      showToast("Deal Pack submitted for Clarence review and queued for cloud sync.", "success");
-      await refreshData();
-
-      if (syncState.isOnline) {
-        syncEngine.syncPendingTransactions().then(() => refreshData()).catch(() => {});
+      try {
+        const savedServer = await saveTransactionToSupabase(recordToSave, currentUser);
+        setSelectedTx(savedServer);
+        showToast("Deal Pack submitted and saved to Supabase database.", "success");
+      } catch (dbErr) {
+        console.warn("Direct DB submit notice, falling back to local queue:", dbErr);
+        await saveOfflineTransaction(recordToSave, currentUser);
+        setSelectedTx(recordToSave);
+        showToast("Deal Pack queued locally for Clarence review.", "success");
       }
+
+      await refreshData();
     } catch (err) {
       showToast(`Submission error: ${err.message}`, "error");
     } finally {
@@ -405,14 +428,18 @@ export default function TransactionModule() {
         sync_status: "pending_sync",
       };
 
-      await saveOfflineTransaction(recordToSave, currentUser);
-      setSelectedTx(recordToSave);
-      showToast(`Transaction ${decision.toUpperCase()} by ${currentUser?.name || "Clarence"}.`, "success");
-      await refreshData();
-
-      if (syncState.isOnline) {
-        syncEngine.syncPendingTransactions().then(() => refreshData()).catch(() => {});
+      try {
+        const savedServer = await saveTransactionToSupabase(recordToSave, currentUser);
+        setSelectedTx(savedServer);
+        showToast(`Transaction ${decision.toUpperCase()} directly in Supabase database.`, "success");
+      } catch (dbErr) {
+        console.warn("Direct DB approval notice, falling back to local store:", dbErr);
+        await saveOfflineTransaction(recordToSave, currentUser);
+        setSelectedTx(recordToSave);
+        showToast(`Transaction ${decision.toUpperCase()} saved locally.`, "success");
       }
+
+      await refreshData();
     } catch (err) {
       showToast(`Approval error: ${err.message}`, "error");
     } finally {

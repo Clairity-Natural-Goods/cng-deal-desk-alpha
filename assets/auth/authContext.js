@@ -22,6 +22,16 @@ export async function fetchCurrentSessionUser() {
     }
 
     const user = session.user;
+
+    // Strict Email Confirmation Check: If email is not confirmed, sign out and bar from dashboard
+    const isEmailConfirmed = Boolean(user.email_confirmed_at || user.confirmed_at);
+    if (!isEmailConfirmed) {
+      console.warn("Unconfirmed user attempted session access:", user.email);
+      await supabase.auth.signOut();
+      activeUserCache = null;
+      return null;
+    }
+
     try {
       const { data: profile } = await supabase
         .from("profiles")
@@ -75,7 +85,7 @@ export async function resendConfirmationEmail(email) {
   });
   if (error) {
     if (error.code === "over_email_send_rate_limit" || error.message?.includes("rate limit")) {
-      throw new Error("Email send rate limit reached. Please wait a few minutes or confirm your user in the Supabase Dashboard.");
+      throw new Error("Email send rate limit reached. Please wait a few minutes or check your Gmail.");
     }
     throw new Error(error.message || "Could not resend confirmation email.");
   }
@@ -83,25 +93,53 @@ export async function resendConfirmationEmail(email) {
 }
 
 export async function login(credentials) {
-  if (!credentials.email || !credentials.password) {
-    throw new Error("Email and password are required.");
+  const identifier = (credentials.identifier || credentials.email || credentials.username || "").trim();
+  if (!identifier || !credentials.password) {
+    throw new Error("Email/username and password are required.");
+  }
+
+  let emailToUse = identifier;
+  // If user entered a username instead of email, resolve their email address from profiles
+  if (!identifier.includes("@")) {
+    try {
+      const { data: profile } = await supabase
+        .from("profiles")
+        .select("email")
+        .ilike("username", identifier)
+        .maybeSingle();
+
+      if (profile && profile.email) {
+        emailToUse = profile.email;
+      }
+    } catch (err) {
+      console.warn("Username lookup notice:", err);
+    }
   }
 
   const { data, error } = await supabase.auth.signInWithPassword({
-    email: credentials.email.trim(),
+    email: emailToUse,
     password: credentials.password,
   });
 
   if (error) {
     if (error.message.includes("Invalid login credentials") || error.code === "invalid_credentials") {
-      throw new Error("Email or password is incorrect.");
+      throw new Error("Email/username or password is incorrect.");
     }
     if (error.message.includes("Email not confirmed") || error.code === "email_not_confirmed") {
-      const err = new Error("Email not confirmed. Please check your inbox or confirm the user in Supabase.");
+      const err = new Error("Email not confirmed. Please check your Gmail/inbox and click the confirmation link to activate your account.");
       err.code = "email_not_confirmed";
       throw err;
     }
     throw new Error(error.message || "Failed to sign in.");
+  }
+
+  // Strict check: if email is not confirmed, sign out immediately
+  if (data?.user && !data.user.email_confirmed_at && !data.user.confirmed_at) {
+    await supabase.auth.signOut();
+    activeUserCache = null;
+    const err = new Error("Email not confirmed. Please check your Gmail/inbox and click the confirmation link to activate your account.");
+    err.code = "email_not_confirmed";
+    throw err;
   }
 
   const user = await fetchCurrentSessionUser();
@@ -136,21 +174,22 @@ export async function register(userData) {
 
   if (error) {
     if (error.code === "over_email_send_rate_limit" || error.message?.includes("rate limit")) {
-      throw new Error("Supabase email rate limit reached. Please disable 'Confirm email' in Supabase Dashboard -> Auth -> Providers -> Email.");
+      throw new Error("Email send rate limit reached. Please wait a few minutes before trying again.");
     }
     throw new Error(error.message || "Registration failed.");
   }
 
-  if (!data?.session && data?.user) {
-    return {
-      user: data.user,
-      needsConfirmation: true,
-      message: "Registration successful! Please confirm your email before signing in.",
-    };
+  // Strict security: ensure user is NOT automatically signed in; must confirm via email first
+  if (data?.session) {
+    await supabase.auth.signOut();
   }
+  activeUserCache = null;
 
-  const user = await fetchCurrentSessionUser();
-  return { user: user || data?.user, needsConfirmation: false };
+  return {
+    user: data?.user,
+    needsConfirmation: true,
+    message: "Registration successful! Please check your Gmail/inbox and confirm your email before signing in.",
+  };
 }
 
 export async function logout() {

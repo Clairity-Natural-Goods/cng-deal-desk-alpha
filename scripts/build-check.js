@@ -36,6 +36,7 @@ checkFile("supabase/migrations/20261104000003_auto_confirm_users.sql", "Supabase
 checkFile("supabase/migrations/20261110000001_mvtr_transactions.sql", "Supabase MVTR Transactions Migration");
 checkFile("supabase/migrations/20261114000001_identity_disclosure_and_audit.sql", "Identity Disclosure & Audit Migration");
 checkFile("supabase/migrations/20261114000002_add_sunflower_commodity.sql", "Sunflower Commodity Expansion Migration");
+checkFile("supabase/migrations/20261114000003_require_email_confirmation.sql", "Strict Email Confirmation Migration");
 
 // 3. Verify JavaScript Assets & Modules
 checkFile("assets/supabaseClient.js", "Supabase JavaScript Client");

@@ -1634,6 +1634,59 @@ runTest("PERSIST-03", "Data Integrity - Client IDs default to valid PostgreSQL U
   assert.ok(isValidUUID(generateUUID()), "generateUUID must output valid UUID format");
 });
 
+// AUTH-02: Mandatory Email Confirmation Before Dashboard Access
+runTest("AUTH-02", "Auth Security - Unconfirmed users strictly barred from dashboard access and auto-confirm trigger dropped", () => {
+  const migPath = path.join(projectRoot, "supabase/migrations/20261114000003_require_email_confirmation.sql");
+  assert.ok(fs.existsSync(migPath), "Strict email confirmation migration must exist");
+  const migContent = fs.readFileSync(migPath, "utf8");
+  assert.ok(migContent.includes("DROP TRIGGER IF EXISTS trg_auto_confirm_new_user"), "Must drop auto-confirm trigger");
+  assert.ok(migContent.includes("DROP FUNCTION IF EXISTS public.auto_confirm_new_user"), "Must drop auto-confirm function");
+
+  // Verify authContext.js checks email_confirmed_at
+  const authContextPath = path.join(projectRoot, "assets/auth/authContext.js");
+  const authContextContent = fs.readFileSync(authContextPath, "utf8");
+  assert.ok(authContextContent.includes("email_confirmed_at"), "authContext must strictly check email_confirmed_at");
+  assert.ok(authContextContent.includes("needsConfirmation: true"), "register must always require email confirmation");
+});
+
+// AUTH-03: Flexible Sign-in Support (Email or Username)
+runTest("AUTH-03", "Auth Usability - Login form supports sign-in with either email or username", () => {
+  const loginPath = path.join(projectRoot, "assets/auth/LoginPage.js");
+  const loginContent = fs.readFileSync(loginPath, "utf8");
+  assert.ok(loginContent.includes("Email or Username"), "Login form input must label Email or Username");
+  assert.ok(loginContent.includes("identifier"), "Login form must accept identifier field");
+
+  const authContextPath = path.join(projectRoot, "assets/auth/authContext.js");
+  const authContextContent = fs.readFileSync(authContextPath, "utf8");
+  assert.ok(authContextContent.includes('ilike("username", identifier)'), "login must resolve email from username when identifier has no @");
+});
+
+// PERSIST-04: Draft Persistence for Incomplete Transactions
+runTest("PERSIST-04", "Database Persistence - Incomplete draft transactions are preserved with Draft status without wiping", async () => {
+  const draftId = "44444444-5555-4666-8777-888888888888";
+  // Incomplete record: only commodity and proof tonnes filled, buyer and supplier left pending
+  const incompleteDraft = {
+    client_id: draftId,
+    commodity: "Sunflower",
+    buyer_id: null,
+    supplier_id: null,
+    status: "Draft",
+    buyer_requirements: { buyer_name: "", required_tonnes: 15 },
+    supplier_verification: { supplier_name: "", moisture_reading_pct: 0 },
+  };
+
+  const normalized = normalizeTransactionRecord(incompleteDraft);
+  assert.strictEqual(normalized.status, "Draft");
+  assert.strictEqual(normalized.commodity, "Sunflower");
+  assert.strictEqual(normalized.client_id, draftId);
+
+  await saveOfflineTransaction(normalized);
+  const stored = await getOfflineTransaction(draftId);
+  assert.ok(stored, "Incomplete draft must be saved and retrievable");
+  assert.strictEqual(stored.status, "Draft");
+  assert.strictEqual(stored.commodity, "Sunflower");
+});
+
 // ==============================================================================
 // SUMMARY
 // ==============================================================================

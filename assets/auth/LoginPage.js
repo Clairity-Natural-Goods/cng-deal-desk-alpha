@@ -26,7 +26,7 @@ export function renderLoginPage(container, { onLogin, onRegister }) {
       <h1 id="auth-title">Welcome back</h1>
       <p class="auth-subtitle">Sign in to your CNG Deal Desk account with verified Supabase credentials.</p>
       <form id="auth-login-form" novalidate>
-        <label>Email<input name="email" type="email" autocomplete="email" required placeholder="name@company.com"></label>
+        <label>Email or Username<input name="identifier" type="text" autocomplete="username" required placeholder="name@company.com or username"></label>
         <label>Password
           <div class="auth-password-wrapper">
             <input name="password" type="password" autocomplete="current-password" required>
@@ -59,7 +59,8 @@ export function renderLoginPage(container, { onLogin, onRegister }) {
     if (oldResend) oldResend.remove();
 
     try {
-      await onLogin({ email: data.get("email"), password: data.get("password") });
+      const identifier = data.get("identifier") || data.get("email");
+      await onLogin({ identifier, email: identifier, password: data.get("password") });
     } catch (reason) {
       error.style.color = "#b91c1c";
       error.textContent = reason.message || "Unable to sign in.";

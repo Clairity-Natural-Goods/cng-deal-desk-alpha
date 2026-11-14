@@ -46,6 +46,74 @@ function normalizeStatusForPostgres(status) {
   return "Draft";
 }
 
+/**
+ * Direct synchronous Supabase PostgreSQL writer.
+ * Guarantees that draft transactions are saved to the remote database immediately.
+ */
+export async function saveTransactionToSupabase(record, currentUser = null) {
+  let syncClientId = record.client_id;
+  if (!isValidUUID(syncClientId)) {
+    if (syncClientId === "mat_seed_001") {
+      syncClientId = "00000000-0000-4000-8000-000000000001";
+    } else if (syncClientId === "mat_seed_002") {
+      syncClientId = "00000000-0000-4000-8000-000000000002";
+    } else {
+      syncClientId = generateUUID();
+    }
+  }
+
+  const payload = {
+    client_id: syncClientId,
+    reference: record.reference,
+    created_by: isValidUUID(record.created_by) ? record.created_by : (isValidUUID(currentUser?.id) ? currentUser.id : null),
+    created_by_name: record.created_by_name || currentUser?.name || currentUser?.email || "Field Officer",
+    status: normalizeStatusForPostgres(record.status),
+    buyer_id: sanitizeForeignKey(record.buyer_id),
+    supplier_id: sanitizeForeignKey(record.supplier_id),
+    commodity: record.commodity || "Maize",
+    buyer_requirements: record.buyer_requirements || {},
+    supplier_verification: record.supplier_verification || {},
+    transport_collection: record.transport_collection || {},
+    payment_terms: record.payment_terms || {},
+    fee_margin: record.fee_margin || {},
+    decision_matrix: record.decision_matrix || {},
+    approval: record.approval || {},
+    notes: record.notes || "",
+    sync_version: (record.sync_version || 0) + 1,
+    created_at: record.created_at || new Date().toISOString(),
+    updated_at: new Date().toISOString(),
+  };
+
+  let { data, error } = await supabase
+    .from("transactions")
+    .upsert(payload, { onConflict: "client_id" })
+    .select()
+    .single();
+
+  if (error && (error.code === "23503" || String(error.message).includes("foreign key"))) {
+    console.warn(`Foreign key defense for ${record.reference}. Detaching unverified party IDs.`);
+    payload.buyer_id = null;
+    payload.supplier_id = null;
+    const retryRes = await supabase
+      .from("transactions")
+      .upsert(payload, { onConflict: "client_id" })
+      .select()
+      .single();
+    data = retryRes.data;
+    error = retryRes.error;
+  }
+
+  if (error) {
+    console.error(`Direct Supabase save failed for ${record.reference}:`, error);
+    await markTransactionSyncFailed(syncClientId, error.message);
+    throw new Error(error.message || "Failed to persist transaction to Supabase database.");
+  }
+
+  const savedRecord = data || payload;
+  await markTransactionSynced(syncClientId, savedRecord);
+  return savedRecord;
+}
+
 class SyncEngine {
   constructor() {
     this.isOnline = typeof navigator !== "undefined" ? navigator.onLine : true;
