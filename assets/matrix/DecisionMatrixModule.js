@@ -500,22 +500,22 @@ export default function DecisionMatrixModule() {
           jsxs("div", {
             className: "p-3.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 shadow-sm",
             children: [
-              jsx("div", { className: "text-[11px] font-bold text-slate-500 uppercase tracking-wide", children: "Total Deals" }),
-              jsx("div", { className: "text-2xl font-black mt-1", children: stats.total }),
+              jsx("div", { className: "text-[11px] font-bold text-slate-600 dark:text-slate-300 uppercase tracking-wide", children: "Total Deals" }),
+              jsx("div", { className: "text-2xl font-black text-slate-900 dark:text-white mt-1", children: stats.total }),
             ],
           }),
           jsxs("div", {
             className: "p-3.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 shadow-sm",
             children: [
-              jsx("div", { className: "text-[11px] font-bold text-slate-500 uppercase tracking-wide", children: "Drafts" }),
-              jsx("div", { className: "text-2xl font-black text-slate-700 dark:text-slate-300 mt-1", children: stats.drafts }),
+              jsx("div", { className: "text-[11px] font-bold text-slate-600 dark:text-slate-300 uppercase tracking-wide", children: "Drafts" }),
+              jsx("div", { className: "text-2xl font-black text-slate-900 dark:text-slate-100 mt-1", children: stats.drafts }),
             ],
           }),
           jsxs("div", {
             className: "p-3.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 shadow-sm",
             children: [
-              jsx("div", { className: "text-[11px] font-bold text-purple-600 uppercase tracking-wide", children: "Awaiting Review" }),
-              jsx("div", { className: "text-2xl font-black text-purple-600 mt-1", children: stats.awaitingReview }),
+              jsx("div", { className: "text-[11px] font-bold text-blue-600 dark:text-blue-400 uppercase tracking-wide", children: "Awaiting Review" }),
+              jsx("div", { className: "text-2xl font-black text-blue-600 dark:text-blue-400 mt-1", children: stats.awaitingReview }),
             ],
           }),
           jsxs("div", {
@@ -914,19 +914,19 @@ export default function DecisionMatrixModule() {
                           children: [
                             jsxs("div", {
                               children: [
-                                jsx("div", { className: "text-slate-500 font-medium", children: "Buyer Purchase Total" }),
+                                jsx("div", { className: "text-slate-600 dark:text-slate-300 font-semibold", children: "Buyer Purchase Total" }),
                                 jsx("div", { className: "text-base font-bold text-slate-900 dark:text-slate-100 mt-0.5", children: formatCurrency(financialResult.buyerCoverage.buyerAmount) }),
                               ],
                             }),
                             jsxs("div", {
                               children: [
-                                jsx("div", { className: "text-slate-500 font-medium", children: "Total Delivered Cost" }),
+                                jsx("div", { className: "text-slate-600 dark:text-slate-300 font-semibold", children: "Total Delivered Cost" }),
                                 jsx("div", { className: "text-base font-bold text-slate-900 dark:text-slate-100 mt-0.5", children: formatCurrency(financialResult.buyerCoverage.deliveredCost) }),
                               ],
                             }),
                             jsxs("div", {
                               children: [
-                                jsx("div", { className: "text-slate-500 font-medium", children: "Coverage Buffer" }),
+                                jsx("div", { className: "text-slate-600 dark:text-slate-300 font-semibold", children: "Coverage Buffer" }),
                                 jsx("div", {
                                   className: cn("text-base font-bold mt-0.5", financialResult.buyerCoverage.difference >= 0 ? "text-emerald-600 dark:text-emerald-400" : "text-rose-600 dark:text-rose-400"),
                                   children: formatCurrency(financialResult.buyerCoverage.difference),
@@ -935,7 +935,7 @@ export default function DecisionMatrixModule() {
                             }),
                             jsxs("div", {
                               children: [
-                                jsx("div", { className: "text-slate-500 font-medium", children: "Coverage Ratio" }),
+                                jsx("div", { className: "text-slate-600 dark:text-slate-300 font-semibold", children: "Coverage Ratio" }),
                                 jsx("div", {
                                   className: cn("text-base font-bold mt-0.5", financialResult.buyerCoverage.isCovered ? "text-emerald-600 dark:text-emerald-400" : "text-rose-600 dark:text-rose-400"),
                                   children: `${financialResult.buyerCoverage.coveragePercentage || 0}%`,
@@ -1061,7 +1061,7 @@ export default function DecisionMatrixModule() {
                             className: "w-full text-left divide-y divide-slate-100 dark:divide-slate-800",
                             children: [
                               jsx("thead", {
-                                className: "bg-slate-50 dark:bg-slate-800/60 font-semibold text-slate-500 uppercase text-[10px]",
+                                className: "bg-slate-50 dark:bg-slate-800/70 font-semibold text-slate-700 dark:text-slate-300 uppercase text-[10px]",
                                 children: jsxs("tr", {
                                   children: [
                                     jsx("th", { className: "p-2.5", children: "Component" }),
@@ -1077,11 +1077,11 @@ export default function DecisionMatrixModule() {
                                 children: jsxs("tr", {
                                   children: [
                                     jsx("td", { className: "p-2.5 font-sans font-medium text-slate-800 dark:text-slate-200", children: "Quality Assay, Weighbridge & Settlement" }),
-                                    jsx("td", { className: "p-2.5", children: formatCurrency(financialResult.cngServiceEconomics?.earnedServiceRevenue || 0) }),
-                                    jsx("td", { className: "p-2.5 text-slate-500", children: formatCurrency(financialResult.cngServiceEconomics?.directServiceCosts || 0) }),
-                                    jsx("td", { className: "p-2.5 text-slate-500", children: formatCurrency(financialResult.cngServiceEconomics?.overheadAmount || 0) }),
+                                    jsx("td", { className: "p-2.5 text-slate-900 dark:text-slate-100 font-semibold", children: formatCurrency(financialResult.cngServiceEconomics?.earnedServiceRevenue || 0) }),
+                                    jsx("td", { className: "p-2.5 text-slate-700 dark:text-slate-300 font-medium", children: formatCurrency(financialResult.cngServiceEconomics?.directServiceCosts || 0) }),
+                                    jsx("td", { className: "p-2.5 text-slate-700 dark:text-slate-300 font-medium", children: formatCurrency(financialResult.cngServiceEconomics?.overheadAmount || 0) }),
                                     jsx("td", {
-                                      className: cn("p-2.5 text-right font-bold", (financialResult.cngServiceEconomics?.retainedContribution || 0) > 0 ? "text-emerald-600 dark:text-emerald-400" : "text-rose-600"),
+                                      className: cn("p-2.5 text-right font-bold", (financialResult.cngServiceEconomics?.retainedContribution || 0) > 0 ? "text-emerald-600 dark:text-emerald-400" : "text-rose-600 dark:text-rose-400"),
                                       children: formatCurrency(financialResult.cngServiceEconomics?.retainedContribution || 0),
                                     }),
                                   ],
@@ -1275,7 +1275,7 @@ export default function DecisionMatrixModule() {
                                 ],
                               }),
                               jsx("span", {
-                                className: cn("px-2 py-0.5 rounded text-[10px] font-bold", formData.supervisory_approved ? "bg-emerald-100 text-emerald-800" : "bg-purple-100 text-purple-800"),
+                                className: cn("px-2 py-0.5 rounded text-[10px] font-bold", formData.supervisory_approved ? "bg-emerald-100 text-emerald-800 dark:bg-emerald-950/60 dark:text-emerald-300" : "bg-blue-100 text-blue-800 dark:bg-blue-950/60 dark:text-blue-300"),
                                 children: formData.supervisory_approved ? "Completed" : "Awaiting Approval",
                               }),
                             ],
@@ -1292,7 +1292,7 @@ export default function DecisionMatrixModule() {
                       jsx("button", {
                         type: "button",
                         onClick: () => setActiveTab("grid"),
-                        className: "px-4 py-2 text-xs font-semibold rounded-xl border border-slate-300 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800",
+                        className: "px-4 py-2 text-xs font-semibold rounded-xl border border-slate-300 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800 text-slate-800 dark:text-slate-200",
                         children: "Cancel / Back to Grid",
                       }),
                       jsxs("div", {
@@ -1309,7 +1309,7 @@ export default function DecisionMatrixModule() {
                             type: "button",
                             onClick: () => handleSave("Awaiting Review"),
                             disabled: isSaving,
-                            className: "px-4 py-2 text-xs font-bold rounded-xl border border-purple-600 text-purple-700 dark:text-purple-400 hover:bg-purple-50",
+                            className: "px-4 py-2 text-xs font-bold rounded-xl border border-blue-600 text-blue-700 dark:text-blue-400 hover:bg-blue-50 dark:hover:bg-blue-950/40",
                             children: isSaving ? "Submitting..." : "Submit for Review",
                           }),
                           jsx("button", {
@@ -1523,7 +1523,7 @@ export default function DecisionMatrixModule() {
                       className: "w-full text-left text-xs divide-y divide-slate-100 dark:divide-slate-800",
                       children: [
                         jsx("thead", {
-                          className: "bg-slate-50 dark:bg-slate-800/50 font-bold uppercase tracking-wider text-[11px] text-slate-500",
+                          className: "bg-slate-50 dark:bg-slate-800/70 font-bold uppercase tracking-wider text-[11px] text-slate-700 dark:text-slate-300",
                           children: jsxs("tr", {
                             children: [
                               jsx("th", { className: "p-3.5", children: "Reference & Counterparty" }),
@@ -1554,25 +1554,25 @@ export default function DecisionMatrixModule() {
                                     className: "p-3.5 font-mono font-bold text-slate-900 dark:text-slate-100",
                                     children: [
                                       r.reference,
-                                      r.buyer_name ? jsxs("div", { className: "text-[10px] font-sans font-normal text-slate-400 truncate max-w-[140px]", children: ["To: ", r.buyer_name] }) : null,
+                                      r.buyer_name ? jsxs("div", { className: "text-[10px] font-sans font-normal text-slate-500 dark:text-slate-400 truncate max-w-[140px]", children: ["To: ", r.buyer_name] }) : null,
                                     ],
                                   }),
                                   jsxs("td", {
-                                    className: "p-3.5 font-medium",
+                                    className: "p-3.5 font-medium text-slate-900 dark:text-slate-100",
                                     children: [
                                       r.commodity,
-                                      r.lane ? jsxs("div", { className: "text-[10px] font-normal text-slate-400 truncate max-w-[140px]", children: [r.lane] }) : null,
+                                      r.lane ? jsxs("div", { className: "text-[10px] font-normal text-slate-500 dark:text-slate-400 truncate max-w-[140px]", children: [r.lane] }) : null,
                                     ],
                                   }),
-                                  jsx("td", { className: "p-3.5 font-mono", children: `${r.volume} ${r.volume_unit || "MT"}` }),
-                                  jsx("td", { className: "p-3.5 font-mono", children: formatCurrency(r.delivered_cost || r.total_costs) }),
+                                  jsx("td", { className: "p-3.5 font-mono font-semibold text-slate-900 dark:text-slate-100", children: `${r.volume} ${r.volume_unit || "MT"}` }),
+                                  jsx("td", { className: "p-3.5 font-mono font-semibold text-slate-900 dark:text-slate-100", children: formatCurrency(r.delivered_cost || r.total_costs) }),
                                   jsx("td", {
                                     className: "p-3.5",
                                     children: r.buyer_coverage_status ? (
                                       jsx("span", {
                                         className: cn(
                                           "px-2 py-0.5 rounded-full text-[10px] font-bold tracking-wide",
-                                          r.buyer_coverage_status === "COVERED" ? "bg-emerald-50 text-emerald-800 border border-emerald-300 dark:bg-emerald-950 dark:text-emerald-300" : "bg-rose-50 text-rose-800 border border-rose-300"
+                                          r.buyer_coverage_status === "COVERED" ? "bg-emerald-50 text-emerald-800 border border-emerald-300 dark:bg-emerald-950 dark:text-emerald-300" : "bg-rose-50 text-rose-800 border border-rose-300 dark:bg-rose-950 dark:text-rose-300 dark:border-rose-800"
                                         ),
                                         children: r.buyer_coverage_status === "COVERED" ? `Covered (${r.buyer_coverage_pct || 100}%)` : `Shortfall (${r.buyer_coverage_pct || 0}%)`,
                                       })
@@ -1583,19 +1583,19 @@ export default function DecisionMatrixModule() {
                                   jsx("td", {
                                     className: cn(
                                       "p-3.5 font-mono font-bold",
-                                      isPositive ? "text-emerald-600 dark:text-emerald-400" : isNegative ? "text-rose-600 dark:text-rose-400" : "text-slate-500"
+                                      isPositive ? "text-emerald-600 dark:text-emerald-400" : isNegative ? "text-rose-600 dark:text-rose-400" : "text-slate-700 dark:text-slate-300"
                                     ),
                                     children: formatCurrency(r.net_margin),
                                   }),
                                   jsx("td", {
                                     className: cn(
                                       "p-3.5 font-mono font-bold",
-                                      isPositive ? "text-emerald-600 dark:text-emerald-400" : isNegative ? "text-rose-600 dark:text-rose-400" : "text-slate-500"
+                                      isPositive ? "text-emerald-600 dark:text-emerald-400" : isNegative ? "text-rose-600 dark:text-rose-400" : "text-slate-700 dark:text-slate-300"
                                     ),
                                     children: formatPercentage(r.margin_percentage),
                                   }),
                                   jsx("td", {
-                                    className: "p-3.5 font-mono font-semibold text-slate-700 dark:text-slate-300",
+                                    className: "p-3.5 font-mono font-semibold text-slate-900 dark:text-slate-100",
                                     children: formatCurrency(r.cng_retained_contribution || 0),
                                   }),
                                   jsxs("td", {
@@ -1607,8 +1607,8 @@ export default function DecisionMatrixModule() {
                                           r.status === "Approved"
                                             ? "bg-emerald-50 text-emerald-800 border border-emerald-300 dark:bg-emerald-950 dark:text-emerald-300"
                                             : r.status === "Awaiting Review"
-                                            ? "bg-purple-50 text-purple-800 border border-purple-300"
-                                            : "bg-slate-100 text-slate-700 border border-slate-300"
+                                            ? "bg-blue-50 text-blue-800 border border-blue-300 dark:bg-blue-950 dark:text-blue-300 dark:border-blue-800"
+                                            : "bg-slate-100 text-slate-800 border border-slate-300 dark:bg-slate-900 dark:text-slate-200 dark:border-slate-700"
                                         ),
                                         children: r.status,
                                       }),

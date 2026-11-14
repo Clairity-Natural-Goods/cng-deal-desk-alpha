@@ -523,13 +523,13 @@ export default function TransactionModule() {
   // Render Status Badge
   const renderStatusBadge = (status) => {
     const map = {
-      Draft: "bg-slate-100 text-slate-800 border-slate-300",
-      FieldCaptured: "bg-blue-50 text-blue-800 border-blue-300",
-      DealPackIncomplete: "bg-amber-50 text-amber-800 border-amber-300",
-      DealPackComplete: "bg-teal-50 text-teal-800 border-teal-300",
-      SubmittedForReview: "bg-purple-50 text-purple-800 border-purple-300",
-      Approved: "bg-emerald-50 text-emerald-800 border-emerald-300 font-semibold",
-      Rejected: "bg-rose-50 text-rose-800 border-rose-300",
+      Draft: "bg-slate-100 text-slate-800 border-slate-300 dark:bg-slate-900 dark:text-slate-200 dark:border-slate-700",
+      FieldCaptured: "bg-blue-50 text-blue-800 border-blue-300 dark:bg-blue-950/60 dark:text-blue-300 dark:border-blue-800",
+      DealPackIncomplete: "bg-amber-50 text-amber-800 border-amber-300 dark:bg-amber-950/60 dark:text-amber-300 dark:border-amber-800",
+      DealPackComplete: "bg-teal-50 text-teal-800 border-teal-300 dark:bg-teal-950/60 dark:text-teal-300 dark:border-teal-800",
+      SubmittedForReview: "bg-blue-50 text-blue-900 border-blue-300 dark:bg-blue-950/60 dark:text-blue-300 dark:border-blue-800",
+      Approved: "bg-emerald-50 text-emerald-800 border-emerald-300 dark:bg-emerald-950/60 dark:text-emerald-300 dark:border-emerald-800 font-semibold",
+      Rejected: "bg-rose-50 text-rose-800 border-rose-300 dark:bg-rose-950/60 dark:text-rose-300 dark:border-rose-800",
     };
     return jsx("span", {
       className: cn("inline-flex items-center px-2.5 py-0.5 rounded-full text-xs border tracking-wide", map[status] || map.Draft),
@@ -541,30 +541,30 @@ export default function TransactionModule() {
   const renderSyncBadge = (syncStatus, errorMsg) => {
     if (syncStatus === "synced") {
       return jsxs("span", {
-        className: "inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] bg-emerald-50 text-emerald-700 font-medium",
+        className: "inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] bg-emerald-50 text-emerald-800 dark:bg-emerald-950/60 dark:text-emerald-300 font-medium border border-emerald-200 dark:border-emerald-800",
         title: "Synchronized with Supabase",
         children: [
-          jsx("span", { className: "w-1.5 h-1.5 rounded-full bg-emerald-600" }),
+          jsx("span", { className: "w-1.5 h-1.5 rounded-full bg-emerald-600 dark:bg-emerald-400" }),
           "Synced",
         ],
       });
     }
     if (syncStatus === "sync_failed") {
       return jsxs("span", {
-        className: "inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] bg-rose-50 text-rose-700 font-medium cursor-pointer",
+        className: "inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] bg-rose-50 text-rose-800 dark:bg-rose-950/60 dark:text-rose-300 font-medium border border-rose-200 dark:border-rose-800 cursor-pointer",
         title: errorMsg || "Sync failed. Click to retry.",
         onClick: handleManualSync,
         children: [
-          jsx("span", { className: "w-1.5 h-1.5 rounded-full bg-rose-600 animate-pulse" }),
+          jsx("span", { className: "w-1.5 h-1.5 rounded-full bg-rose-600 dark:bg-rose-400 animate-pulse" }),
           "Sync Failed",
         ],
       });
     }
     return jsxs("span", {
-      className: "inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] bg-amber-50 text-amber-700 font-medium",
-      title: "Pending synchronization",
+      className: "inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] bg-amber-50 text-amber-800 dark:bg-amber-950/60 dark:text-amber-300 font-medium border border-amber-200 dark:border-amber-800",
+      title: "Pending synchronization to Supabase",
       children: [
-        jsx("span", { className: "w-1.5 h-1.5 rounded-full bg-amber-600" }),
+        jsx("span", { className: "w-1.5 h-1.5 rounded-full bg-amber-500 animate-pulse" }),
         "Pending Sync",
       ],
     });
@@ -665,8 +665,8 @@ export default function TransactionModule() {
                   jsxs("div", {
                     className: "p-4 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 shadow-sm",
                     children: [
-                      jsx("div", { className: "text-xs font-semibold text-slate-500 uppercase", children: "Total Records" }),
-                      jsx("div", { className: "text-2xl font-bold mt-1", children: stats.total }),
+                      jsx("div", { className: "text-xs font-semibold text-slate-600 dark:text-slate-300 uppercase", children: "Total Records" }),
+                      jsx("div", { className: "text-2xl font-bold text-slate-900 dark:text-white mt-1", children: stats.total }),
                     ],
                   }),
                   jsxs("div", {
@@ -802,34 +802,34 @@ export default function TransactionModule() {
 
                                 // Buyer & Supplier summary
                                 jsxs("div", {
-                                  className: "p-3 rounded-xl bg-slate-50 dark:bg-slate-800/50 space-y-1 text-xs",
+                                  className: "p-3 rounded-xl bg-slate-50 dark:bg-slate-800/60 space-y-1 text-xs",
                                   children: [
                                     jsxs("div", {
                                       className: "flex justify-between",
                                       children: [
-                                        jsx("span", { className: "text-slate-500", children: "Buyer:" }),
-                                        jsx("span", { className: "font-semibold truncate max-w-[160px]", children: tx.buyer_requirements?.buyer_name || "Pending" }),
+                                        jsx("span", { className: "text-slate-600 dark:text-slate-300 font-medium", children: "Buyer:" }),
+                                        jsx("span", { className: "font-semibold text-slate-900 dark:text-slate-100 truncate max-w-[160px]", children: tx.buyer_requirements?.buyer_name || "Pending" }),
                                       ],
                                     }),
                                     jsxs("div", {
                                       className: "flex justify-between",
                                       children: [
-                                        jsx("span", { className: "text-slate-500", children: "Supplier:" }),
-                                        jsx("span", { className: "font-semibold truncate max-w-[160px]", children: tx.supplier_verification?.supplier_name || "Pending" }),
+                                        jsx("span", { className: "text-slate-600 dark:text-slate-300 font-medium", children: "Supplier:" }),
+                                        jsx("span", { className: "font-semibold text-slate-900 dark:text-slate-100 truncate max-w-[160px]", children: tx.supplier_verification?.supplier_name || "Pending" }),
                                       ],
                                     }),
                                     jsxs("div", {
                                       className: "flex justify-between",
                                       children: [
-                                        jsx("span", { className: "text-slate-500", children: "Commodity:" }),
-                                        jsxs("span", { className: "font-medium text-emerald-700 dark:text-emerald-400", children: [tx.commodity, " • ", tx.supplier_verification?.confirmed_tonnes || tx.buyer_requirements?.required_tonnes || 0, " t"] }),
+                                        jsx("span", { className: "text-slate-600 dark:text-slate-300 font-medium", children: "Commodity:" }),
+                                        jsxs("span", { className: "font-semibold text-emerald-700 dark:text-emerald-400", children: [tx.commodity, " • ", tx.supplier_verification?.confirmed_tonnes || tx.buyer_requirements?.required_tonnes || 0, " t"] }),
                                       ],
                                     }),
                                     jsxs("div", {
                                       className: "flex justify-between",
                                       children: [
-                                        jsx("span", { className: "text-slate-500", children: "Moisture:" }),
-                                        jsx("span", { className: "font-medium", children: tx.supplier_verification?.moisture_reading_pct ? `${tx.supplier_verification.moisture_reading_pct}%` : "Not tested" }),
+                                        jsx("span", { className: "text-slate-600 dark:text-slate-300 font-medium", children: "Moisture:" }),
+                                        jsx("span", { className: "font-semibold text-slate-900 dark:text-slate-100", children: tx.supplier_verification?.moisture_reading_pct ? `${tx.supplier_verification.moisture_reading_pct}%` : "Not tested" }),
                                       ],
                                     }),
                                   ],
@@ -840,10 +840,10 @@ export default function TransactionModule() {
                                   className: "space-y-1",
                                   children: [
                                     jsxs("div", {
-                                      className: "flex justify-between text-[11px] text-slate-500",
+                                      className: "flex justify-between text-[11px] text-slate-600 dark:text-slate-300",
                                       children: [
                                         jsx("span", { children: "Deal Pack Elements" }),
-                                        jsxs("span", { className: "font-semibold", children: [completedCount, " / 7 Complete"] }),
+                                        jsxs("span", { className: "font-semibold text-slate-900 dark:text-slate-100", children: [completedCount, " / 7 Complete"] }),
                                       ],
                                     }),
                                     jsx("div", {
@@ -866,7 +866,7 @@ export default function TransactionModule() {
                               className: "flex items-center justify-between pt-2 border-t border-slate-100 dark:border-slate-800 text-xs",
                               children: [
                                 jsx("span", {
-                                  className: "text-[11px] text-slate-500 truncate max-w-[140px]",
+                                  className: "text-[11px] text-slate-600 dark:text-slate-300 truncate max-w-[140px]",
                                   children: `By: ${tx.created_by_name || "Field Officer"}`,
                                 }),
                                 jsx("button", {
@@ -974,10 +974,10 @@ export default function TransactionModule() {
                         "p-3 rounded-xl border text-left text-xs font-semibold transition-all flex flex-col justify-between min-h-[58px]",
                         activeSection === sec.num
                           ? "border-emerald-600 bg-emerald-50 text-emerald-950 dark:bg-emerald-950/60 dark:border-emerald-500 dark:text-emerald-100 shadow-sm"
-                          : "border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 text-slate-600 hover:bg-slate-50 dark:text-slate-400"
+                          : "border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-800"
                       ),
                       children: [
-                        jsx("span", { className: "text-[10px] uppercase tracking-wider text-slate-400", children: `Element ${sec.num}` }),
+                        jsx("span", { className: "text-[10px] uppercase tracking-wider text-slate-500 dark:text-slate-400 font-semibold", children: `Element ${sec.num}` }),
                         jsx("span", { className: "font-bold truncate mt-0.5", children: sec.title }),
                       ],
                     },
@@ -1000,7 +1000,7 @@ export default function TransactionModule() {
                             className: "border-b border-slate-100 dark:border-slate-800 pb-3",
                             children: [
                               jsx("h3", { className: "text-base font-bold text-slate-900 dark:text-slate-100", children: "Element 01 — Buyer Requirements" }),
-                              jsx("p", { className: "text-xs text-slate-500 mt-0.5", children: "Capture buyer identity, specification, required tonnage, moisture tolerance, and purchasing conditions." }),
+                              jsx("p", { className: "text-xs text-slate-600 dark:text-slate-300 mt-0.5", children: "Capture buyer identity, specification, required tonnage, moisture tolerance, and purchasing conditions." }),
                             ],
                           }),
                           jsxs("div", {
@@ -1133,7 +1133,7 @@ export default function TransactionModule() {
                             className: "border-b border-slate-100 dark:border-slate-800 pb-3",
                             children: [
                               jsx("h3", { className: "text-base font-bold text-slate-900 dark:text-slate-100", children: "Element 02 — Supplier Verification" }),
-                              jsx("p", { className: "text-xs text-slate-500 mt-0.5", children: "Capture supplier identity, calibrated field moisture readings, confirmed volumes, and physical verification." }),
+                              jsx("p", { className: "text-xs text-slate-600 dark:text-slate-300 mt-0.5", children: "Capture supplier identity, calibrated field moisture readings, confirmed volumes, and physical verification." }),
                             ],
                           }),
                           jsxs("div", {
@@ -1278,7 +1278,7 @@ export default function TransactionModule() {
                             className: "border-b border-slate-100 dark:border-slate-800 pb-3",
                             children: [
                               jsx("h3", { className: "text-base font-bold text-slate-900 dark:text-slate-100", children: "Element 03 — Transport & Collection" }),
-                              jsx("p", { className: "text-xs text-slate-500 mt-0.5", children: "Capture collection arrangement, transporter identity, collection point, destination, and costs." }),
+                              jsx("p", { className: "text-xs text-slate-600 dark:text-slate-300 mt-0.5", children: "Capture collection arrangement, transporter identity, collection point, destination, and costs." }),
                             ],
                           }),
                           jsxs("div", {
@@ -1407,7 +1407,7 @@ export default function TransactionModule() {
                             className: "border-b border-slate-100 dark:border-slate-800 pb-3",
                             children: [
                               jsx("h3", { className: "text-base font-bold text-slate-900 dark:text-slate-100", children: "Element 04 — Payment Terms" }),
-                              jsx("p", { className: "text-xs text-slate-500 mt-0.5", children: "Agreed pricing, currency (UGX), payment schedule, deposit requirement, and strict payment verification status." }),
+                              jsx("p", { className: "text-xs text-slate-600 dark:text-slate-300 mt-0.5", children: "Agreed pricing, currency (UGX), payment schedule, deposit requirement, and strict payment verification status." }),
                             ],
                           }),
                           jsxs("div", {
@@ -1535,7 +1535,7 @@ export default function TransactionModule() {
                             className: "border-b border-slate-100 dark:border-slate-800 pb-3",
                             children: [
                               jsx("h3", { className: "text-base font-bold text-slate-900 dark:text-slate-100", children: "Element 05 — CNG Fee & Margin Calculator" }),
-                              jsx("p", { className: "text-xs text-slate-500 mt-0.5", children: "Explicit commercial calculation: minimum UGX 25,000 floor rule, operational costs, and 15% overhead." }),
+                              jsx("p", { className: "text-xs text-slate-600 dark:text-slate-300 mt-0.5", children: "Explicit commercial calculation: minimum UGX 25,000 floor rule, operational costs, and 15% overhead." }),
                             ],
                           }),
 
@@ -1693,7 +1693,7 @@ export default function TransactionModule() {
                               jsxs("div", {
                                 children: [
                                   jsx("h3", { className: "text-base font-bold text-slate-900 dark:text-slate-100", children: "Element 06 — Decision Matrix Score" }),
-                                  jsx("p", { className: "text-xs text-slate-500 mt-0.5", children: "Score 5 core evaluation criteria (0-20 each, total 100). Preserving business underwriting rules." }),
+                                  jsx("p", { className: "text-xs text-slate-600 dark:text-slate-300 mt-0.5", children: "Score 5 core evaluation criteria (0-20 each, total 100). Preserving business underwriting rules." }),
                                 ],
                               }),
                               jsxs("div", {
@@ -1795,7 +1795,7 @@ export default function TransactionModule() {
                             className: "border-b border-slate-100 dark:border-slate-800 pb-3",
                             children: [
                               jsx("h3", { className: "text-base font-bold text-slate-900 dark:text-slate-100", children: "Element 07 — Clarence Approval Status" }),
-                              jsx("p", { className: "text-xs text-slate-500 mt-0.5", children: "Only Clarence or an authorized delegated approver may approve transactions. Field officers cannot self-approve." }),
+                              jsx("p", { className: "text-xs text-slate-600 dark:text-slate-300 mt-0.5", children: "Only Clarence or an authorized delegated approver may approve transactions. Field officers cannot self-approve." }),
                             ],
                           }),
 
