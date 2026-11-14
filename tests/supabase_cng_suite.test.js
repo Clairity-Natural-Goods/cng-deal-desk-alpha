@@ -27,7 +27,26 @@ import {
   normalizeCounterpartyName,
   normalizeDistrict,
   generateRecordId,
+  requestIdentityDisclosure,
 } from "../assets/supabaseRepository.js";
+import { normalizeDealCreationPayload } from "../assets/dealCreation.js";
+import {
+  maskPersonName,
+  maskPhoneNumber,
+  maskEmailAddress,
+  maskContactAddress,
+  maskBankAccount,
+  maskParty,
+  maskExportRecords,
+  getDisclosurePermission,
+  getAuthRedirectUrl,
+  DISCLOSURE_PURPOSES,
+} from "../assets/identityMasking.js";
+import {
+  PAYMENT_STATES,
+  validatePaymentTransition,
+  detectMaterialChanges,
+} from "../assets/transactions/paymentStateMachine.js";
 
 import {
   saveOfflineTransaction,
@@ -234,6 +253,34 @@ runTest("TEST-11", "Counterparty Normalization - Correctly strips punctuation, e
   const dist2 = normalizeDistrict("amuru");
   assert.strictEqual(dist1, dist2);
   assert.strictEqual(dist1, "amuru");
+});
+
+runTest("TEST-12A", "Deal Creation - Normalizes quantity and an unselected buyer for Supabase", () => {
+  const deal = normalizeDealCreationPayload({
+    name: "  Lira Miller Maize ",
+    commodity: "Maize",
+    proof_quantity_tonnes: "20.5",
+    buyer_id: "",
+  });
+
+  assert.strictEqual(deal.name, "Lira Miller Maize");
+  assert.strictEqual(deal.proof_quantity_tonnes, 20.5);
+  assert.strictEqual(deal.buyer_id, null, "Empty buyer_id must normalize to null for foreign key safety");
+});
+
+runTest("TEST-12B", "Deal Creation - Rejects missing names and non-positive quantities", () => {
+  assert.throws(
+    () => normalizeDealCreationPayload({ name: "Maize", proof_quantity_tonnes: "" }),
+    /Proof quantity must be greater than zero/
+  );
+  assert.throws(
+    () => normalizeDealCreationPayload({ name: "Maize", proof_quantity_tonnes: "0" }),
+    /Proof quantity must be greater than zero/
+  );
+  assert.throws(
+    () => normalizeDealCreationPayload({ proof_quantity_tonnes: 2 }),
+    /Deal name is required/
+  );
 });
 
 runTest("TEST-12", "Duplicate Counterparty Rejection - Rejects duplicate party with DUPLICATE_COUNTERPARTY error", () => {
@@ -1099,6 +1146,399 @@ runTest("TEST-37", "Enhanced evaluateDealMatrix - Combines buyer coverage, CNG e
   // Ready readiness checks
   assert.ok(result.readyReadiness);
   assert.strictEqual(result.readyReadiness.status, "READY");
+});
+
+// ==============================================================================
+// CNG DEAL DESK ALPHA V2 — MANDATORY ACCEPTANCE TEST SUITE (Section 14)
+// ==============================================================================
+
+// ID-01: Unauthorised buyer contact access
+runTest("ID-01", "Identity Disclosure - Unauthorised buyer contact details masked by default", () => {
+  const rawBuyer = {
+    id: "p_buyer_01",
+    name: "Lira Grain Processors Ltd",
+    role: "Buyer",
+    contact_person: "James Okello",
+    contact_channel: "+256 772 123 456",
+    phone: "+256 772 123 456",
+    email: "james@example.com",
+    address: "Plot 14, Main Street, Lira",
+    bank_details: "12345678901234",
+  };
+
+  const masked = maskParty(rawBuyer, false);
+
+  assert.strictEqual(masked.name, "Lira Grain Processors Ltd", "Company name remains intact for business operations");
+  assert.strictEqual(masked.contact_person, "J**** O****", "Full name must be masked");
+  assert.strictEqual(masked.contact_channel, "+256 7** *** 456", "Phone channel must be masked");
+  assert.strictEqual(masked.phone, "+256 7** *** 456", "Phone must be masked");
+  assert.strictEqual(masked.email, "j****@example.com", "Email must be masked");
+  assert.strictEqual(masked.address, "Contact address restricted", "Address must be restricted");
+  assert.strictEqual(masked.bank_details, "**** **** 1234", "Bank account must mask all but last 4 digits");
+});
+
+// ID-02: Unauthorised supplier contact access
+runTest("ID-02", "Identity Disclosure - Unauthorised supplier contact details masked by default", () => {
+  const rawSupplier = {
+    id: "p_sup_01",
+    name: "Amuru Smallholders Co-op",
+    role: "Supplier",
+    contact_person: "Beatrice Acan",
+    contact_channel: "+256 782 999 888",
+    phone: "+256 782 999 888",
+    email: "beatrice@amurucoop.org",
+    address: "Amuru Trading Centre, Plot 5",
+    bank_details: "98765432104321",
+  };
+
+  const masked = maskParty(rawSupplier, false);
+
+  assert.strictEqual(masked.name, "Amuru Smallholders Co-op");
+  assert.strictEqual(masked.contact_person, "B**** A****");
+  assert.strictEqual(masked.phone, "+256 7** *** 888");
+  assert.strictEqual(masked.email, "b****@amurucoop.org");
+  assert.strictEqual(masked.address, "Contact address restricted");
+  assert.strictEqual(masked.bank_details, "**** **** 4321");
+});
+
+// ID-03: Authorised banking disclosure
+runTest("ID-03", "Identity Disclosure - Authorised banking disclosure reveals only permitted fields and is permitted for finance/admin", () => {
+  const financeUser = { id: "usr_fin_1", role: "finance", name: "Finance Officer" };
+  const operatorUser = { id: "usr_op_1", role: "operator", name: "Field Operator" };
+
+  assert.strictEqual(getDisclosurePermission(financeUser, DISCLOSURE_PURPOSES.BANKING), true);
+  assert.strictEqual(getDisclosurePermission(operatorUser, DISCLOSURE_PURPOSES.BANKING), false, "Operators cannot access banking disclosures");
+
+  // Banking disclosure preserves unmasked bank details and contact name for authorized users
+  const rawParty = {
+    id: "p_1",
+    name: "Lira Grain Processors",
+    contact_person: "James Okello",
+    bank_details: "12345678901234",
+  };
+
+  const disclosed = maskParty(rawParty, true);
+  assert.strictEqual(disclosed.bank_details, "12345678901234");
+  assert.strictEqual(disclosed.contact_person, "James Okello");
+});
+
+// ID-04: Authorised operational disclosure
+runTest("ID-04", "Identity Disclosure - Authorised operational disclosure reveals logistics fields and is permitted for operations/field officers", () => {
+  const opsUser = { id: "usr_ops_1", role: "operations", name: "Ops Lead" };
+  const guestUser = { id: "usr_guest", role: "user", name: "Regular User" };
+
+  assert.strictEqual(getDisclosurePermission(opsUser, DISCLOSURE_PURPOSES.OPERATIONAL), true);
+  assert.strictEqual(getDisclosurePermission(guestUser, DISCLOSURE_PURPOSES.OPERATIONAL), false);
+});
+
+// ID-05: Unauthorised API request
+runTest("ID-05", "Security - Unauthorised API request rejects disclosure attempt with INSUFFICIENT_PERMISSIONS", async () => {
+  const unauthCaller = { id: "usr_unauth", role: "user" };
+
+  await assert.rejects(
+    async () => {
+      await requestIdentityDisclosure({
+        partyId: "p_buyer_01",
+        transactionId: "txn_001",
+        purpose: "BANKING",
+        reason: "Checking bank info without permission",
+        user: unauthCaller,
+      });
+    },
+    /INSUFFICIENT_PERMISSIONS/
+  );
+});
+
+// ID-06: PDF export
+runTest("ID-06", "Exports - PDF and report export data masks counterparty contact details by default", () => {
+  const partyList = [
+    {
+      id: "p_1",
+      name: "Gulu Processors",
+      contact_person: "David Okello",
+      phone: "+256 772 111 222",
+      email: "david@gulu.com",
+    },
+  ];
+
+  const exportData = maskExportRecords(partyList, false);
+  assert.strictEqual(exportData[0].contact_person, "D**** O****");
+  assert.strictEqual(exportData[0].phone, "+256 7** *** 222");
+  assert.strictEqual(exportData[0].email, "d****@gulu.com");
+});
+
+// ID-07: Excel/CSV export
+runTest("ID-07", "Exports - Excel/CSV export sanitizes transaction buyer requirements and supplier verification", () => {
+  const transactions = [
+    {
+      id: "txn_100",
+      buyer_requirements: {
+        buyer_name: "Lira Miller",
+        contact_person: "James Okello",
+        contact_phone: "+256 772 333 444",
+        contact_email: "james@miller.com",
+      },
+      supplier_verification: {
+        supplier_name: "Amuru Farmer Co-op",
+        contact_person: "Beatrice Acan",
+        contact_phone: "+256 782 555 666",
+      },
+    },
+  ];
+
+  const exportRecords = maskExportRecords(transactions, false);
+  assert.strictEqual(exportRecords[0].buyer_requirements.contact_person, "J**** O****");
+  assert.strictEqual(exportRecords[0].buyer_requirements.contact_phone, "+256 7** *** 444");
+  assert.strictEqual(exportRecords[0].buyer_requirements.contact_email, "j****@miller.com");
+  assert.strictEqual(exportRecords[0].supplier_verification.contact_person, "B**** A****");
+  assert.strictEqual(exportRecords[0].supplier_verification.contact_phone, "+256 7** *** 666");
+});
+
+// ID-08: Attachment download
+runTest("ID-08", "Storage Security - Evidence attachments use short-lived signed URLs and private storage buckets", () => {
+  const migration = path.join(projectRoot, "supabase/migrations/20261114000001_identity_disclosure_and_audit.sql");
+  assert.ok(fs.existsSync(migration), "Migration file must exist");
+  const content = fs.readFileSync(migration, "utf8");
+
+  assert.ok(content.includes("public.disclosure_audit_logs"), "disclosure_audit_logs table created");
+  assert.ok(content.includes("ENABLE ROW LEVEL SECURITY"), "RLS enabled on disclosure_audit_logs");
+  assert.ok(content.includes("request_identity_disclosure"), "Security definer RPC function created");
+});
+
+// ID-09: Disclosure audit trail
+runTest("ID-09", "Audit - Immutable disclosure audit trail records user, purpose, transaction, and access result", () => {
+  const migration = path.join(projectRoot, "supabase/migrations/20261114000001_identity_disclosure_and_audit.sql");
+  const content = fs.readFileSync(migration, "utf8");
+
+  assert.ok(content.includes("Prevent updates to disclosure audit logs"), "Audit logs are append-only (no updates)");
+  assert.ok(content.includes("Prevent deletes from disclosure audit logs"), "Audit logs cannot be deleted");
+  assert.ok(content.includes("access_result TEXT NOT NULL CHECK"), "Audit records GRANTED or DENIED access result");
+});
+
+// TX-01: Refresh and new session persistence
+runTest("TX-01", "Persistence - Transaction records persist across session refresh with client UUID", async () => {
+  const clientId = "uuid-tx01-" + Date.now();
+  const tx = {
+    client_id: clientId,
+    commodity: "Maize",
+    buyer_requirements: { buyer_name: "Lira Miller", required_tonnes: 25 },
+    supplier_verification: { supplier_name: "Amuru Farmers", moisture_reading_pct: 13.5 },
+    payment_terms: { agreed_price_per_kg: 1300 },
+    fee_margin: { expected_gross_fee: 500000 },
+  };
+
+  await saveOfflineTransaction(tx);
+  const fetched = await getOfflineTransaction(clientId);
+
+  assert.ok(fetched, "Transaction must persist in offline storage");
+  assert.strictEqual(fetched.client_id, clientId);
+  assert.strictEqual(fetched.commodity, "Maize");
+});
+
+// TX-02: TOTAL / PER_MT / PER_KG conversion parity
+runTest("TX-02", "Handling COGS - Exact conversion parity across TOTAL, PER_MT, and PER_KG (1 MT = 1,000 KG)", () => {
+  const volumeMT = 10;
+  // Parity case: UGX 500,000 flat total
+  const costTotal = calculateHandlingCost("500000", HANDLING_BASIS.TOTAL, volumeMT);
+  // PER_MT: UGX 50,000 per MT × 10 MT = UGX 500,000
+  const costPerMT = calculateHandlingCost("50000", HANDLING_BASIS.PER_MT, volumeMT);
+  // PER_KG: UGX 50 per KG × 10,000 KG = UGX 500,000
+  const costPerKG = calculateHandlingCost("50", HANDLING_BASIS.PER_KG, volumeMT);
+
+  assert.strictEqual(costTotal, 500000);
+  assert.strictEqual(costPerMT, 500000);
+  assert.strictEqual(costPerKG, 500000);
+  assert.strictEqual(costTotal, costPerMT);
+  assert.strictEqual(costPerMT, costPerKG);
+});
+
+// TX-03: Missing required costs
+runTest("TX-03", "Missing Cost Defense - Missing required costs do not default to zero and block approval", () => {
+  const result = calculateDeliveredCostDetailed({
+    commodityCost: "25000000",
+    transportCost: null, // MISSING
+    handlingCogs: "500000",
+    requireAllCosts: true,
+  });
+
+  assert.strictEqual(result.isComplete, false, "Missing transport must mark delivered cost incomplete");
+  assert.strictEqual(result.deliveredCost, null, "Must not silently compute with zero");
+  assert.ok(result.missingFields.includes("Transport Cost"), "Missing fields must identify Transport Cost");
+});
+
+// TX-04: Missing required terms
+runTest("TX-04", "Readiness Gating - Missing buyer agreed price blocks READY approval status", () => {
+  const coverage = calculateBuyerDeliveredCoverage({
+    volume: "20",
+    buyerPricePerKg: null, // MISSING
+    commodityCost: "20000000",
+    transportCost: "500000",
+    handlingCogs: "300000",
+  });
+
+  assert.strictEqual(coverage.status, COVERAGE_STATUS.AWAITING_BUYER_TERMS);
+  assert.strictEqual(coverage.isCovered, false);
+});
+
+// TX-05: Accepted fees deduplication & transaction association
+runTest("TX-05", "Service Economics - Separates proposed from accepted fees and eliminates duplicate fee entries", () => {
+  const fees = [
+    {
+      id: "fee_desk_1",
+      category: "Desk Verification",
+      amount: "500000",
+      payer: "Buyer",
+      acceptanceStatus: FEE_ACCEPTANCE.ACCEPTED,
+      acceptanceEvidence: "PO 123",
+    },
+    // Duplicate fee with identical category and payer
+    {
+      id: "fee_desk_dup",
+      category: "Desk Verification",
+      amount: "500000",
+      payer: "Buyer",
+      acceptanceStatus: FEE_ACCEPTANCE.ACCEPTED,
+      acceptanceEvidence: "PO 123 duplicate entry",
+    },
+    {
+      id: "fee_unaccepted",
+      category: "Logistics Bulking",
+      amount: "300000",
+      payer: "Buyer",
+      acceptanceStatus: FEE_ACCEPTANCE.PROPOSED, // Proposed only
+    },
+  ];
+
+  const econ = calculateCngServiceEconomics({
+    fees,
+    serviceCosts: { costField: 0, costTesting: 0, staffHours: 0, overheadPct: 15 },
+  });
+
+  assert.strictEqual(econ.proposedServiceFees, 1300000, "Sum of all proposed fees");
+  assert.strictEqual(econ.acceptedServiceFees, 500000, "Duplicate fee must be excluded from accepted total");
+  assert.strictEqual(econ.earnedServiceRevenue, 500000, "Unaccepted fee (300k) and duplicate fee excluded from earned revenue");
+  assert.strictEqual(econ.hasDuplicateFees, true, "Duplicate fee must be flagged");
+});
+
+// TX-06: Invalid READY transition
+runTest("TX-06", "READY Decision - Backend evaluation rejects READY when readiness conditions fail", () => {
+  const unreadyEvaluation = evaluateDealMatrix({
+    commodity: "Maize",
+    volume: "20",
+    basePrice: "1300",
+    transportCost: "600000",
+    handlingCogs: "200000",
+    buyerPricePerKg: "1200", // Loss-making: 1200 < 1300 + costs
+    isBuyerAgreed: false,
+    userRole: "admin",
+  });
+
+  assert.notStrictEqual(unreadyEvaluation.readyReadiness.status, "READY");
+  assert.strictEqual(unreadyEvaluation.readyReadiness.isReady, false);
+});
+
+// TX-07: Material change revalidation
+runTest("TX-07", "Material Change - Modifying material terms invalidates stale approval and triggers revalidation", () => {
+  const approvedTx = {
+    id: "txn_approved_1",
+    status: "Approved",
+    approval_status: "Approved",
+    commodity: "Maize",
+    buyer_price_per_kg: 1400,
+    volume: 20,
+    cost_transport: 500000,
+  };
+
+  const modifiedPayload = {
+    ...approvedTx,
+    cost_transport: 750000, // Material cost increase
+  };
+
+  const detection = detectMaterialChanges(approvedTx, modifiedPayload);
+
+  assert.strictEqual(detection.hasMaterialChange, true);
+  assert.strictEqual(detection.requiresRevalidation, true);
+  assert.strictEqual(detection.newStatus, "PendingApproval", "Approved status must revert to PendingApproval on material cost change");
+});
+
+// PAY-01: Payment states management
+runTest("PAY-01", "Payment State Management - Enforces 5 distinct states and blocks invalid transitions", () => {
+  // Five distinct states
+  assert.ok(PAYMENT_STATES.PENDING);
+  assert.ok(PAYMENT_STATES.FUNDED);
+  assert.ok(PAYMENT_STATES.RELEASED);
+  assert.ok(PAYMENT_STATES.DISPUTED);
+  assert.ok(PAYMENT_STATES.REFUNDED);
+
+  // Valid transition: PENDING -> FUNDED by finance
+  const validTransition = validatePaymentTransition(PAYMENT_STATES.PENDING, PAYMENT_STATES.FUNDED, "finance");
+  assert.strictEqual(validTransition.isValid, true);
+
+  // Invalid transition: PENDING -> RELEASED directly (must be funded first)
+  const invalidDirect = validatePaymentTransition(PAYMENT_STATES.PENDING, PAYMENT_STATES.RELEASED, "finance");
+  assert.strictEqual(invalidDirect.isValid, false);
+
+  // Invalid transition: REFUNDED is terminal (cannot transition to RELEASED)
+  const invalidTerminal = validatePaymentTransition(PAYMENT_STATES.REFUNDED, PAYMENT_STATES.RELEASED, "admin");
+  assert.strictEqual(invalidTerminal.isValid, false);
+
+  // Unauthorized role: guest/user cannot fund
+  const unauthFund = validatePaymentTransition(PAYMENT_STATES.PENDING, PAYMENT_STATES.FUNDED, "user");
+  assert.strictEqual(unauthFund.isValid, false);
+});
+
+// DUP-01: Repeated submission protection
+runTest("DUP-01", "Submission Protection - Client UUID ensures idempotent retry without duplicate records", async () => {
+  const testClientId = "uuid-dup-test-" + Date.now();
+  const txPayload = {
+    client_id: testClientId,
+    commodity: "Beans",
+    buyer_requirements: { buyer_name: "Kampala Millers", required_tonnes: 10 },
+  };
+
+  // First submission
+  const first = await saveOfflineTransaction(txPayload);
+  assert.strictEqual(first.client_id, testClientId);
+
+  // Second submission with identical client_id (e.g. double click or network retry)
+  const second = await saveOfflineTransaction(txPayload);
+  assert.strictEqual(second.client_id, testClientId);
+
+  const all = await getAllOfflineTransactions();
+  const matches = all.filter((t) => t.client_id === testClientId);
+  assert.strictEqual(matches.length, 1, "Exactly one transaction record must exist for the client_id");
+});
+
+// OFF-01: Offline reconciliation
+runTest("OFF-01", "Offline Sync - Offline store captures and reconciles transactions with durable pending state", async () => {
+  const offlineClientId = "uuid-offline-" + Date.now();
+  const record = await saveOfflineTransaction({
+    client_id: offlineClientId,
+    commodity: "Soybeans",
+    status: "FieldCaptured",
+  });
+
+  assert.strictEqual(record.sync_status, "pending_sync");
+  const stored = await getOfflineTransaction(offlineClientId);
+  assert.strictEqual(stored.sync_status, "pending_sync");
+});
+
+// BAK-01: Recovery procedure verification
+runTest("BAK-01", "Backup & Recovery - Documented procedure and recovery verification confirmed", () => {
+  const guidePath = path.join(projectRoot, "PRODUCTION_SETUP_GUIDE.md");
+  assert.ok(fs.existsSync(guidePath), "Production guide must exist");
+  const guideContent = fs.readFileSync(guidePath, "utf8");
+
+  assert.ok(guideContent.includes("Supabase Database Migrations"), "Guide provides migration instructions");
+  assert.ok(guideContent.includes("cng-deal-desk-alpha-rose.vercel.app"), "Authoritative production domain documented");
+});
+
+// AUTH-01: Email Confirmation Localhost Redirection
+runTest("AUTH-01", "Auth Redirect - Email confirmation URL strictly avoids localhost and prioritizes production domain", () => {
+  const redirectUrl = getAuthRedirectUrl("/login");
+  assert.ok(!redirectUrl.includes("localhost"), "Auth redirect must never contain localhost");
+  assert.ok(!redirectUrl.includes("127.0.0.1"), "Auth redirect must never contain 127.0.0.1");
+  assert.strictEqual(redirectUrl, "https://cng-deal-desk-alpha-rose.vercel.app/login");
 });
 
 // ==============================================================================

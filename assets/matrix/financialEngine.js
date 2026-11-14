@@ -379,9 +379,12 @@ export function calculateCngServiceEconomics({
 } = {}) {
   // Deduplicate and filter fees
   const seenIds = new Set();
+  const seenCategories = new Set();
   let proposedTotal = 0;
   let acceptedTotal = 0;
   let earnedRevenue = 0;
+  let hasDuplicateFees = false;
+  const duplicateFeeNames = [];
 
   const processedFees = (Array.isArray(fees) ? fees : []).map((fee, idx) => {
     const feeId = fee.id || `fee_${idx}`;
@@ -391,8 +394,15 @@ export function calculateCngServiceEconomics({
     const status = fee.acceptanceStatus || FEE_ACCEPTANCE.PROPOSED;
     const hasEvidence = Boolean(fee.acceptanceEvidence && String(fee.acceptanceEvidence).trim() !== "");
 
-    const isDuplicate = seenIds.has(feeId);
+    const sig = `${category.toLowerCase().trim()}::${payer.toLowerCase().trim()}`;
+    const isDuplicate = seenIds.has(feeId) || seenCategories.has(sig);
     seenIds.add(feeId);
+    seenCategories.add(sig);
+
+    if (isDuplicate) {
+      hasDuplicateFees = true;
+      duplicateFeeNames.push(category);
+    }
 
     proposedTotal += amount;
 
@@ -447,6 +457,11 @@ export function calculateCngServiceEconomics({
     isRetainedPositive: retainedContribution > 0,
     feeList: processedFees,
     hasUnacceptedFees: proposedTotal > acceptedTotal,
+    hasDuplicateFees,
+    duplicateFeeNames,
+    duplicateWarning: hasDuplicateFees
+      ? `Duplicate fee detected (${duplicateFeeNames.join(", ")}). Duplicate entries are excluded from earned revenue.`
+      : null,
   };
 }
 

@@ -34,6 +34,7 @@ checkFile("supabase/migrations/20261104000001_initial_schema.sql", "Supabase Ini
 checkFile("supabase/migrations/20261104000002_seed_data.sql", "Supabase Seed Data Migration");
 checkFile("supabase/migrations/20261104000003_auto_confirm_users.sql", "Supabase Auto-Confirm Migration");
 checkFile("supabase/migrations/20261110000001_mvtr_transactions.sql", "Supabase MVTR Transactions Migration");
+checkFile("supabase/migrations/20261114000001_identity_disclosure_and_audit.sql", "Identity Disclosure & Audit Migration");
 
 // 3. Verify JavaScript Assets & Modules
 checkFile("assets/supabaseClient.js", "Supabase JavaScript Client");
@@ -66,6 +67,12 @@ const jsFilesToCheck = [
   "assets/transactions/TransactionModule.js",
   "assets/matrix/financialEngine.js",
   "assets/matrix/DecisionMatrixModule.js",
+  "assets/dealCreation.js",
+  "assets/Deals-BCwyOzL-.js",
+  "assets/identityMasking.js",
+  "assets/transactions/paymentStateMachine.js",
+  "assets/Registry-C6DBQU1c.js",
+  "assets/Data-DV5c2Wc2.js",
 ];
 
 for (const f of jsFilesToCheck) {

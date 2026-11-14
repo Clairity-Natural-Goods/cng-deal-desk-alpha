@@ -1,9 +1,11 @@
 import { i as loadReact } from "../utils-fF95r_SJ.js";
 import { supabase } from "../supabaseClient.js";
+import { getAuthRedirectUrl } from "../identityMasking.js";
 
 const React = loadReact();
 export const AuthContext = React.createContext(null);
 
+export { getAuthRedirectUrl };
 let activeUserCache = null;
 
 // Synchronously or asynchronously fetch current authenticated user
@@ -67,6 +69,9 @@ export async function resendConfirmationEmail(email) {
   const { error } = await supabase.auth.resend({
     type: "signup",
     email: email.trim(),
+    options: {
+      emailRedirectTo: getAuthRedirectUrl("/login"),
+    },
   });
   if (error) {
     if (error.code === "over_email_send_rate_limit" || error.message?.includes("rate limit")) {
@@ -121,6 +126,7 @@ export async function register(userData) {
     email: userData.email.trim(),
     password: userData.password,
     options: {
+      emailRedirectTo: getAuthRedirectUrl("/login"),
       data: {
         name: userData.name?.trim(),
         username: userData.username?.trim(),
@@ -170,7 +176,7 @@ export async function resetPassword(email) {
     throw new Error("Enter a valid email address.");
   }
   const { error } = await supabase.auth.resetPasswordForEmail(email.trim(), {
-    redirectTo: `${window.location.origin}/settings`,
+    redirectTo: getAuthRedirectUrl("/settings"),
   });
   if (error) throw error;
   return true;

@@ -15,6 +15,7 @@ import {
   getCachedParties,
 } from "./offline/offlineStore.js";
 import { syncEngine } from "./offline/syncEngine.js";
+import { normalizeDealCreationPayload } from "./dealCreation.js";
 
 // Counterparty normalization rules
 export function normalizeCounterpartyName(name) {
@@ -45,6 +46,7 @@ const TABLE_MAP = {
   User: "profiles",
   Transaction: "transactions",
   TransactionEvent: "transaction_events",
+  DisclosureAuditLog: "disclosure_audit_logs",
 };
 
 function createEntityRepository(entityName) {
@@ -134,6 +136,10 @@ function createEntityRepository(entityName) {
     },
 
     async create(payload = {}) {
+      if (entityName === "Deal") {
+        payload = normalizeDealCreationPayload(payload);
+      }
+
       // Special offline handling for Transaction
       if (entityName === "Transaction") {
         const localRecord = await saveOfflineTransaction(payload);
@@ -469,6 +475,10 @@ export function createSupabaseDatabaseAdapter() {
 
     syncEngine: syncEngine,
 
+    identity: {
+      requestIdentityDisclosure,
+    },
+
     integrations: {
       Core: {
         async UploadFile(file) {
@@ -489,8 +499,141 @@ export function createSupabaseDatabaseAdapter() {
             return { file_url: URL.createObjectURL(file) };
           }
         },
+
+        async CreateSignedDownloadUrl(filePath, expiresIn = 300) {
+          try {
+            const { data, error } = await supabase.storage
+              .from("evidence")
+              .createSignedUrl(filePath, expiresIn);
+            if (error) throw error;
+            return { signedUrl: data.signedUrl };
+          } catch (err) {
+            console.warn("Signed URL creation failed:", err);
+            return { signedUrl: null, error: err.message };
+          }
+        },
       },
     },
+  };
+}
+
+/**
+ * Controlled identity disclosure caller.
+ * Requests unmasked party contact info via backend RPC function or direct database verification.
+ */
+export async function requestIdentityDisclosure({
+  partyId,
+  transactionId = null,
+  purpose = "OPERATIONAL",
+  reason = "Operational logistics verification",
+  user = null,
+}) {
+  if (!partyId) throw new Error("partyId is required for identity disclosure.");
+  if (!reason || reason.trim().length < 5) {
+    throw new Error("A business reason of at least 5 characters is required.");
+  }
+
+  // 0. Pre-validate permission against authoritative role matrix
+  const allowedRoles = purpose === "BANKING"
+    ? ["admin", "finance", "compliance"]
+    : ["admin", "operations", "field_officer", "operator"];
+
+  const userRole = user?.role || "user";
+  const isAuthorized = allowedRoles.includes(userRole);
+
+  if (!isAuthorized) {
+    // Record denied attempt in audit log if client is active
+    try {
+      await supabase.from("disclosure_audit_logs").insert({
+        transaction_id: transactionId,
+        requesting_user_id: user?.id || null,
+        subject_type: "COUNTERPARTY",
+        disclosure_purpose: purpose,
+        disclosed_fields: [],
+        access_timestamp: new Date().toISOString(),
+        access_result: "DENIED",
+        reason: reason.trim(),
+      });
+    } catch {}
+
+    throw new Error(`INSUFFICIENT_PERMISSIONS: Role "${userRole}" does not permit disclosure for purpose "${purpose}".`);
+  }
+
+  // 1. Attempt server-side Security Definer RPC
+  try {
+    const { data, error } = await supabase.rpc("request_identity_disclosure", {
+      p_party_id: partyId,
+      p_transaction_id: transactionId,
+      p_purpose: purpose,
+      p_reason: reason.trim(),
+    });
+
+    if (error) {
+      if (error.message?.includes("INSUFFICIENT_PERMISSIONS")) {
+        throw new Error(error.message);
+      }
+      // If RPC doesn't exist yet in local/testing env, fallback to direct query with audit insert
+      console.warn("RPC request_identity_disclosure failed, attempting fallback:", error.message);
+    } else if (data) {
+      return data;
+    }
+  } catch (rpcErr) {
+    if (rpcErr.message?.includes("INSUFFICIENT_PERMISSIONS")) {
+      throw rpcErr;
+    }
+  }
+
+  // 2. Client-side fallback with direct query
+  const { data: party, error: partyError } = await supabase
+    .from("parties")
+    .select("*")
+    .eq("id", partyId)
+    .single();
+
+  if (partyError || !party) {
+    throw new Error(partyError?.message || "Party not found.");
+  }
+
+  const subjectType = party.role === "Buyer" ? "BUYER" : party.role === "Supplier" ? "SUPPLIER" : "COUNTERPARTY";
+
+  // Log to disclosure_audit_logs
+  await supabase
+    .from("disclosure_audit_logs")
+    .insert({
+      transaction_id: transactionId,
+      requesting_user_id: user?.id || null,
+      subject_type: subjectType,
+      disclosure_purpose: purpose,
+      disclosed_fields: isAuthorized ? (purpose === "BANKING" ? ["contact_person", "bank_details"] : ["contact_person", "contact_channel", "district"]) : [],
+      access_timestamp: new Date().toISOString(),
+      access_result: isAuthorized ? "GRANTED" : "DENIED",
+      reason: reason.trim(),
+    })
+    .catch((err) => console.warn("Failed to write disclosure audit log:", err));
+
+  if (!isAuthorized) {
+    throw new Error(`INSUFFICIENT_PERMISSIONS: Role "${userRole}" does not permit disclosure for purpose "${purpose}".`);
+  }
+
+  if (purpose === "BANKING") {
+    return {
+      party_id: party.id,
+      name: party.name,
+      contact_person: party.contact_person || "—",
+      bank_details: party.bank_details || "—",
+      purpose: "BANKING",
+      disclosed_at: new Date().toISOString(),
+    };
+  }
+
+  return {
+    party_id: party.id,
+    name: party.name,
+    contact_person: party.contact_person || "—",
+    contact_channel: party.contact_channel || "—",
+    district: party.district || "—",
+    purpose: "OPERATIONAL",
+    disclosed_at: new Date().toISOString(),
   };
 }
 

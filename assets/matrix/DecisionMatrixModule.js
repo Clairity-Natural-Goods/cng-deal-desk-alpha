@@ -960,6 +960,15 @@ export default function DecisionMatrixModule() {
                         ],
                       }),
 
+                      financialResult.cngServiceEconomics?.hasDuplicateFees &&
+                        jsxs("div", {
+                          className: "p-3 rounded-xl bg-amber-50 dark:bg-amber-950/40 border border-amber-300 dark:border-amber-800 text-amber-900 dark:text-amber-200 text-xs flex items-center gap-2",
+                          children: [
+                            jsx("span", { className: "text-base", children: "⚠️" }),
+                            jsx("span", { className: "font-semibold", children: financialResult.cngServiceEconomics?.duplicateWarning || "Duplicate fee entries detected and excluded from earned revenue." }),
+                          ],
+                        }),
+
                       jsxs("div", {
                         className: "grid grid-cols-1 md:grid-cols-2 gap-4 text-xs",
                         children: [
