@@ -96,6 +96,18 @@ function createEntityRepository(entityName) {
 
       const { data, error } = await req;
       if (error) {
+        // Fallback to local storage cache if network is down or query fails on hard refresh
+        if (typeof window !== "undefined" && window.localStorage) {
+          try {
+            const cachedRaw = window.localStorage.getItem(`CNG_CACHE_${tableName.toUpperCase()}`);
+            if (cachedRaw) {
+              const cachedList = JSON.parse(cachedRaw);
+              if (Array.isArray(cachedList) && cachedList.length > 0) {
+                return cachedList;
+              }
+            }
+          } catch (_) {}
+        }
         // Fallback for Party when offline
         if (entityName === "Party") {
           const cached = await getCachedParties();
@@ -105,7 +117,13 @@ function createEntityRepository(entityName) {
         throw error;
       }
 
-      // Cache counterparties for offline field use
+      // Cache counterparties and records for offline field use and hard refresh durability
+      if (typeof window !== "undefined" && window.localStorage && Array.isArray(data)) {
+        try {
+          window.localStorage.setItem(`CNG_CACHE_${tableName.toUpperCase()}`, JSON.stringify(data));
+        } catch (_) {}
+      }
+
       if (entityName === "Party" && Array.isArray(data)) {
         cacheCounterparties(data).catch(() => {});
       }
@@ -209,6 +227,16 @@ function createEntityRepository(entityName) {
         throw error;
       }
 
+      // Mirror created record into LocalStorage cache
+      if (typeof window !== "undefined" && window.localStorage && data) {
+        try {
+          const cachedRaw = window.localStorage.getItem(`CNG_CACHE_${tableName.toUpperCase()}`);
+          const list = cachedRaw ? JSON.parse(cachedRaw) : [];
+          list.unshift(data);
+          window.localStorage.setItem(`CNG_CACHE_${tableName.toUpperCase()}`, JSON.stringify(list));
+        } catch (_) {}
+      }
+
       return data;
     },
 
@@ -247,6 +275,16 @@ function createEntityRepository(entityName) {
         }
         console.error(`Supabase update failed on ${tableName} for ID ${id}:`, error);
         throw error;
+      }
+
+      // Mirror updated record into LocalStorage cache
+      if (typeof window !== "undefined" && window.localStorage && data) {
+        try {
+          const cachedRaw = window.localStorage.getItem(`CNG_CACHE_${tableName.toUpperCase()}`);
+          let list = cachedRaw ? JSON.parse(cachedRaw) : [];
+          list = list.map((item) => (item.id === id ? data : item));
+          window.localStorage.setItem(`CNG_CACHE_${tableName.toUpperCase()}`, JSON.stringify(list));
+        } catch (_) {}
       }
 
       return data;

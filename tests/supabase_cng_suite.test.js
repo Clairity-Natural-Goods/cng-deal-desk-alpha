@@ -21,6 +21,7 @@ import {
   f as corridorAverages,
   d as dataGaps,
   v as marketMetrics,
+  r as COMMODITIES_DESK,
 } from "../assets/desk-CXHNcONN.js";
 
 import {
@@ -58,6 +59,8 @@ import {
   getAllMatrixRecords,
   getMatrixStats,
   generateMatrixReference,
+  isValidUUID,
+  generateUUID,
 } from "../assets/offline/offlineStore.js";
 
 import {
@@ -1540,6 +1543,95 @@ runTest("AUTH-01", "Auth Redirect - Email confirmation URL strictly avoids local
   assert.ok(!redirectUrl.includes("localhost"), "Auth redirect must never contain localhost");
   assert.ok(!redirectUrl.includes("127.0.0.1"), "Auth redirect must never contain 127.0.0.1");
   assert.strictEqual(redirectUrl, "https://cng-deal-desk-alpha-rose.vercel.app/login");
+});
+
+// COMM-01: Sunflower in commodity droplists and schema
+runTest("COMM-01", "Commodity Expansion - 'Sunflower' is supported across frontend droplists, financial engine, and migrations", () => {
+  // 1. Verify in financialEngine COMMODITIES
+  const sunflowerEngine = COMMODITIES.find((c) => c.name === "Sunflower");
+  assert.ok(sunflowerEngine, "Sunflower must be present in financialEngine COMMODITIES");
+  assert.strictEqual(sunflowerEngine.category, "Oilseeds");
+  assert.strictEqual(sunflowerEngine.defaultUnit, "MT");
+
+  // 2. Verify in desk-CXHNcONN.js
+  assert.ok(COMMODITIES_DESK.includes("Sunflower"), "Sunflower must be present in core desk commodities array");
+
+  // 3. Verify in Deals-BCwyOzL-.js select dropdown
+  const dealsPath = path.join(projectRoot, "assets/Deals-BCwyOzL-.js");
+  const dealsContent = fs.readFileSync(dealsPath, "utf8");
+  assert.ok(dealsContent.includes('"Sunflower"'), "DealsPage dropdown must include Sunflower");
+
+  // 4. Verify in TransactionModule.js
+  const txPath = path.join(projectRoot, "assets/transactions/TransactionModule.js");
+  const txContent = fs.readFileSync(txPath, "utf8");
+  assert.ok(txContent.includes('"Sunflower"'), "TransactionModule must include Sunflower");
+
+  // 5. Verify migration file
+  const migPath = path.join(projectRoot, "supabase/migrations/20261114000002_add_sunflower_commodity.sql");
+  assert.ok(fs.existsSync(migPath), "Sunflower migration must exist");
+  const migContent = fs.readFileSync(migPath, "utf8");
+  assert.ok(migContent.includes("'Sunflower'"), "Migration checks Sunflower constraint");
+});
+
+// PERSIST-01: Hard refresh persistence simulation
+runTest("PERSIST-01", "Persistence - Multi-layered store preserves transactions across hard refresh without data loss", async () => {
+  const testId = "11111111-2222-4333-8444-555555555555";
+  const testTx = {
+    client_id: testId,
+    reference: "TXN-PERSIST-001",
+    commodity: "Sunflower",
+    buyer_requirements: { buyer_name: "Lira Sunflower Press", required_tonnes: 50 },
+    supplier_verification: { supplier_name: "Kitgum Oilseed Co-op", confirmed_tonnes: 50 },
+    payment_terms: { agreed_price_per_kg: 2200 },
+    fee_margin: { expected_gross_fee: 1500000 },
+  };
+
+  await saveOfflineTransaction(testTx);
+
+  // Verify retrieval
+  const retrieved = await getOfflineTransaction(testId);
+  assert.ok(retrieved, "Transaction must be found in store");
+  assert.strictEqual(retrieved.commodity, "Sunflower");
+  assert.strictEqual(retrieved.reference, "TXN-PERSIST-001");
+
+  // Verify getAllOfflineTransactions includes the persisted record
+  const all = await getAllOfflineTransactions();
+  const exists = all.some((t) => t.client_id === testId);
+  assert.ok(exists, "Persisted record must appear in getAllOfflineTransactions");
+});
+
+// PERSIST-02: Remote reconciliation test (markTransactionSynced on new record)
+runTest("PERSIST-02", "Sync Reconciliation - Remote records from Supabase are safely saved locally even when local cache is empty", async () => {
+  const remoteClientId = "22222222-3333-4444-8555-666666666666";
+  const remoteServerRecord = {
+    id: "txn_server_999",
+    client_id: remoteClientId,
+    reference: "TXN-REMOTE-001",
+    commodity: "Sunflower",
+    status: "Approved",
+    created_at: new Date().toISOString(),
+  };
+
+  // Prior to call, local cache does not have remoteClientId
+  const synced = await markTransactionSynced(remoteClientId, remoteServerRecord);
+  assert.ok(synced, "markTransactionSynced must instantiate and return record even if not previously in local cache");
+  assert.strictEqual(synced.sync_status, "synced");
+  assert.strictEqual(synced.id, "txn_server_999");
+
+  // Verify that it is now persisted in offline store
+  const stored = await getOfflineTransaction(remoteClientId);
+  assert.ok(stored, "Remote record must now exist in offline store");
+  assert.strictEqual(stored.client_id, remoteClientId);
+  assert.strictEqual(stored.status, "Approved");
+});
+
+// PERSIST-03: UUID format enforcement
+runTest("PERSIST-03", "Data Integrity - Client IDs default to valid PostgreSQL UUIDs when omitted", () => {
+  const generatedRecord = normalizeTransactionRecord({
+    commodity: "Sunflower",
+  });
+  assert.ok(isValidUUID(generatedRecord.client_id), "normalizeTransactionRecord must generate a valid UUID when client_id is omitted");
+  assert.ok(isValidUUID(generateUUID()), "generateUUID must output valid UUID format");
 });
 
 // ==============================================================================

@@ -1,16 +1,78 @@
 /**
  * ==============================================================================
- *   CNG DEAL DESK ALPHA V2 — OFFLINE-FIRST INDEXEDDB STORE
+ *   CNG DEAL DESK ALPHA V2 — OFFLINE-FIRST MULTI-LAYERED PERSISTENCE STORE
  *   Module: assets/offline/offlineStore.js
  *   Purpose: Durable local persistence for MVTR transactions, field captures,
- *            audit events, and counterparty caching when connectivity is poor.
+ *            audit events, Decision Matrix records, and counterparty caching.
+ *            Survives hard refresh via synchronous LocalStorage mirroring and
+ *            IndexedDB caching with auto-reconciliation.
  * ==============================================================================
  */
 
 const DB_NAME = "CNG_DEAL_DESK_OFFLINE_DB";
 const DB_VERSION = 1;
 
-// In-memory fallback for environments without IndexedDB (e.g., Node.js tests or private browsing)
+// Storage keys for synchronous LocalStorage mirror (guarantees survival on hard refresh)
+export const STORAGE_KEYS = {
+  TRANSACTIONS: "CNG_OFFLINE_TRANSACTIONS_V2",
+  EVENTS: "CNG_OFFLINE_EVENTS_V2",
+  PARTIES: "CNG_OFFLINE_PARTIES_V2",
+  METADATA: "CNG_OFFLINE_METADATA_V2",
+};
+
+/**
+ * Standard RFC4122 v4 UUID generator (guarantees Postgres UUID type compliance)
+ */
+export function generateUUID() {
+  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+    try {
+      return crypto.randomUUID();
+    } catch (_) {}
+  }
+  return "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, (c) => {
+    const r = (Math.random() * 16) | 0;
+    const v = c === "x" ? r : (r & 0x3) | 0x8;
+    return v.toString(16);
+  });
+}
+
+/**
+ * Check if a string is a valid RFC4122 UUID
+ */
+export function isValidUUID(str) {
+  if (typeof str !== "string") return false;
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(str.trim());
+}
+
+/**
+ * Synchronous LocalStorage helper routines
+ */
+function loadFromLocalStorage(key, defaultVal = []) {
+  try {
+    if (typeof window !== "undefined" && window.localStorage) {
+      const raw = window.localStorage.getItem(key);
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        return parsed;
+      }
+    }
+  } catch (err) {
+    console.warn(`LocalStorage read warning for ${key}:`, err);
+  }
+  return defaultVal;
+}
+
+function saveToLocalStorage(key, val) {
+  try {
+    if (typeof window !== "undefined" && window.localStorage) {
+      window.localStorage.setItem(key, JSON.stringify(val));
+    }
+  } catch (err) {
+    console.warn(`LocalStorage write warning for ${key}:`, err);
+  }
+}
+
+// In-memory fallback and fast-path cache
 const memoryStore = {
   transactions: new Map(),
   events: new Map(),
@@ -18,12 +80,37 @@ const memoryStore = {
   metadata: new Map(),
 };
 
+// Immediate hydration on module evaluation: loads mirrored records so no data is lost on hard refresh
+try {
+  const cachedTxs = loadFromLocalStorage(STORAGE_KEYS.TRANSACTIONS, []);
+  if (Array.isArray(cachedTxs)) {
+    for (const tx of cachedTxs) {
+      if (tx && tx.client_id) {
+        memoryStore.transactions.set(tx.client_id, tx);
+      }
+    }
+  }
+  const cachedParties = loadFromLocalStorage(STORAGE_KEYS.PARTIES, []);
+  if (Array.isArray(cachedParties)) {
+    for (const p of cachedParties) {
+      if (p && p.id) {
+        memoryStore.parties.set(p.id, p);
+      }
+    }
+  }
+} catch (e) {
+  console.warn("Offline store hydration warning:", e);
+}
+
 /**
  * Check if IndexedDB is available
  */
 function hasIndexedDB() {
   return typeof window !== "undefined" && Boolean(window.indexedDB);
 }
+
+// Cached IndexedDB connection to prevent lock contention
+let cachedDbPromise = null;
 
 /**
  * Open (or create) the IndexedDB database
@@ -33,53 +120,74 @@ export function openOfflineDb() {
     return Promise.resolve(null);
   }
 
-  return new Promise((resolve, reject) => {
-    const request = window.indexedDB.open(DB_NAME, DB_VERSION);
+  if (cachedDbPromise) {
+    return cachedDbPromise;
+  }
 
-    request.onupgradeneeded = (event) => {
-      const db = event.target.result;
+  cachedDbPromise = new Promise((resolve) => {
+    try {
+      const request = window.indexedDB.open(DB_NAME, DB_VERSION);
 
-      // 1. Transactions Object Store
-      if (!db.objectStoreNames.contains("transactions")) {
-        const txStore = db.createObjectStore("transactions", { keyPath: "client_id" });
-        txStore.createIndex("reference", "reference", { unique: false });
-        txStore.createIndex("status", "status", { unique: false });
-        txStore.createIndex("sync_status", "sync_status", { unique: false });
-        txStore.createIndex("commodity", "commodity", { unique: false });
-        txStore.createIndex("created_at", "created_at", { unique: false });
-        txStore.createIndex("updated_at", "updated_at", { unique: false });
-      }
+      request.onupgradeneeded = (event) => {
+        const db = event.target.result;
 
-      // 2. Transaction Events Object Store (Audit Log)
-      if (!db.objectStoreNames.contains("transaction_events")) {
-        const evStore = db.createObjectStore("transaction_events", { keyPath: "id" });
-        evStore.createIndex("client_id", "client_id", { unique: false });
-        evStore.createIndex("transaction_id", "transaction_id", { unique: false });
-        evStore.createIndex("created_at", "created_at", { unique: false });
-      }
+        // 1. Transactions Object Store
+        if (!db.objectStoreNames.contains("transactions")) {
+          const txStore = db.createObjectStore("transactions", { keyPath: "client_id" });
+          txStore.createIndex("reference", "reference", { unique: false });
+          txStore.createIndex("status", "status", { unique: false });
+          txStore.createIndex("sync_status", "sync_status", { unique: false });
+          txStore.createIndex("commodity", "commodity", { unique: false });
+          txStore.createIndex("created_at", "created_at", { unique: false });
+          txStore.createIndex("updated_at", "updated_at", { unique: false });
+        }
 
-      // 3. Counterparty Cache (for offline field selection)
-      if (!db.objectStoreNames.contains("cached_parties")) {
-        const pStore = db.createObjectStore("cached_parties", { keyPath: "id" });
-        pStore.createIndex("role", "role", { unique: false });
-        pStore.createIndex("district", "district", { unique: false });
-      }
+        // 2. Transaction Events Object Store (Audit Log)
+        if (!db.objectStoreNames.contains("transaction_events")) {
+          const evStore = db.createObjectStore("transaction_events", { keyPath: "id" });
+          evStore.createIndex("client_id", "client_id", { unique: false });
+          evStore.createIndex("transaction_id", "transaction_id", { unique: false });
+          evStore.createIndex("created_at", "created_at", { unique: false });
+        }
 
-      // 4. Sync Metadata
-      if (!db.objectStoreNames.contains("sync_metadata")) {
-        db.createObjectStore("sync_metadata", { keyPath: "key" });
-      }
-    };
+        // 3. Counterparty Cache (for offline field selection)
+        if (!db.objectStoreNames.contains("cached_parties")) {
+          const pStore = db.createObjectStore("cached_parties", { keyPath: "id" });
+          pStore.createIndex("role", "role", { unique: false });
+          pStore.createIndex("district", "district", { unique: false });
+        }
 
-    request.onsuccess = (event) => {
-      resolve(event.target.result);
-    };
+        // 4. Sync Metadata
+        if (!db.objectStoreNames.contains("sync_metadata")) {
+          db.createObjectStore("sync_metadata", { keyPath: "key" });
+        }
+      };
 
-    request.onerror = (event) => {
-      console.warn("Failed to open IndexedDB, falling back to memory:", event.target.error);
+      request.onsuccess = (event) => {
+        const db = event.target.result;
+        db.onversionchange = () => {
+          try { db.close(); } catch (_) {}
+          cachedDbPromise = null;
+        };
+        db.onclose = () => {
+          cachedDbPromise = null;
+        };
+        resolve(db);
+      };
+
+      request.onerror = (event) => {
+        console.warn("Failed to open IndexedDB, falling back to LocalStorage/memory:", event.target?.error);
+        cachedDbPromise = null;
+        resolve(null);
+      };
+    } catch (err) {
+      console.warn("IndexedDB open exception:", err);
+      cachedDbPromise = null;
       resolve(null);
-    };
+    }
   });
+
+  return cachedDbPromise;
 }
 
 /**
@@ -109,12 +217,13 @@ export function generateMatrixReference() {
 /**
  * Ensure standard 7 Deal Pack sections with defaults
  */
-export function normalizeTransactionRecord(data, currentUser = null) {
+export function normalizeTransactionRecord(data = {}, currentUser = null) {
   const now = new Date().toISOString();
-  const clientId = data.client_id || (typeof crypto !== "undefined" && crypto.randomUUID ? crypto.randomUUID() : `cid_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`);
-  const reference = data.reference || generateTransactionReference();
+  const clientId = data.client_id || generateUUID();
+
+  const reference = data.reference || (data.is_matrix_record ? generateMatrixReference() : generateTransactionReference());
   const createdByName = data.created_by_name || currentUser?.user_metadata?.name || currentUser?.name || currentUser?.email || "Field Officer";
-  const createdBy = data.created_by || currentUser?.id || null;
+  const createdBy = isValidUUID(data.created_by) ? data.created_by : (isValidUUID(currentUser?.id) ? currentUser.id : null);
 
   return {
     id: data.id || null,
@@ -126,33 +235,33 @@ export function normalizeTransactionRecord(data, currentUser = null) {
     sync_status: data.sync_status || "pending_sync",
     sync_error: data.sync_error || null,
     last_sync_attempt: data.last_sync_attempt || null,
-    buyer_id: data.buyer_id || null,
-    supplier_id: data.supplier_id || null,
+    buyer_id: data.buyer_id && data.buyer_id !== "none" ? data.buyer_id : null,
+    supplier_id: data.supplier_id && data.supplier_id !== "none" ? data.supplier_id : null,
     commodity: data.commodity || "Maize",
 
     // 01. Buyer Requirements
     buyer_requirements: {
-      buyer_name: data.buyer_requirements?.buyer_name || "",
+      buyer_name: data.buyer_requirements?.buyer_name || data.buyer_name || "",
       product_specification: data.buyer_requirements?.product_specification || "",
-      required_tonnes: Number(data.buyer_requirements?.required_tonnes) || 0,
+      required_tonnes: Number(data.buyer_requirements?.required_tonnes ?? data.volume) || 0,
       moisture_limit_pct: Number(data.buyer_requirements?.moisture_limit_pct) || 14.0,
       quality_spec: data.buyer_requirements?.quality_spec || "Grade 1 - Clean, dry, free of pests",
       delivery_location: data.buyer_requirements?.delivery_location || "",
-      delivery_district: data.buyer_requirements?.delivery_district || "Gulu",
+      delivery_district: data.buyer_requirements?.delivery_district || data.district || "Gulu",
       required_delivery_date: data.buyer_requirements?.required_delivery_date || "",
       purchasing_conditions: data.buyer_requirements?.purchasing_conditions || "",
     },
 
     // 02. Supplier Verification
     supplier_verification: {
-      supplier_name: data.supplier_verification?.supplier_name || "",
+      supplier_name: data.supplier_verification?.supplier_name || data.supplier_name || "",
       contact_person: data.supplier_verification?.contact_person || "",
       phone: data.supplier_verification?.phone || "",
-      district: data.supplier_verification?.district || "Amuru",
+      district: data.supplier_verification?.district || data.district || "Amuru",
       location_details: data.supplier_verification?.location_details || "",
       verification_status: data.supplier_verification?.verification_status || "REPORTED",
-      claimed_tonnes: Number(data.supplier_verification?.claimed_tonnes) || 0,
-      confirmed_tonnes: Number(data.supplier_verification?.confirmed_tonnes) || 0,
+      claimed_tonnes: Number(data.supplier_verification?.claimed_tonnes ?? data.volume) || 0,
+      confirmed_tonnes: Number(data.supplier_verification?.confirmed_tonnes ?? data.volume) || 0,
       moisture_reading_pct: Number(data.supplier_verification?.moisture_reading_pct) || 0,
       verification_date: data.supplier_verification?.verification_date || now.slice(0, 10),
       verifying_officer: data.supplier_verification?.verifying_officer || createdByName,
@@ -166,9 +275,9 @@ export function normalizeTransactionRecord(data, currentUser = null) {
       destination: data.transport_collection?.destination || "",
       transporter_name: data.transport_collection?.transporter_name || "",
       transporter_contact: data.transport_collection?.transporter_contact || "",
-      estimated_tonnes: Number(data.transport_collection?.estimated_tonnes) || 0,
+      estimated_tonnes: Number(data.transport_collection?.estimated_tonnes ?? data.volume) || 0,
       transport_rate_per_tonne: Number(data.transport_collection?.transport_rate_per_tonne) || 0,
-      total_transport_cost: Number(data.transport_collection?.total_transport_cost) || 0,
+      total_transport_cost: Number(data.transport_collection?.total_transport_cost ?? data.transport_cost) || 0,
       collection_status: data.transport_collection?.collection_status || "Planned",
       waybill_ref: data.transport_collection?.waybill_ref || "",
       notes: data.transport_collection?.notes || "",
@@ -176,7 +285,7 @@ export function normalizeTransactionRecord(data, currentUser = null) {
 
     // 04. Payment Terms
     payment_terms: {
-      agreed_price_per_kg: Number(data.payment_terms?.agreed_price_per_kg) || 0,
+      agreed_price_per_kg: Number(data.payment_terms?.agreed_price_per_kg ?? data.base_price) || 0,
       currency: data.payment_terms?.currency || "UGX",
       payment_method: data.payment_terms?.payment_method || "Bank transfer",
       payment_schedule: data.payment_terms?.payment_schedule || "On delivery and inspection",
@@ -202,7 +311,7 @@ export function normalizeTransactionRecord(data, currentUser = null) {
       total_direct_costs: Number(data.fee_margin?.total_direct_costs) || 0,
       overhead_pct: Number(data.fee_margin?.overhead_pct) || 15,
       overhead_amount: Number(data.fee_margin?.overhead_amount) || 0,
-      projected_net_margin: Number(data.fee_margin?.projected_net_margin) || 0,
+      projected_net_margin: Number(data.fee_margin?.projected_net_margin ?? data.net_margin) || 0,
       notes: data.fee_margin?.notes || "",
     },
 
@@ -257,95 +366,161 @@ export function normalizeTransactionRecord(data, currentUser = null) {
 }
 
 /**
- * Save transaction to offline store
+ * Synchronize local memory map to LocalStorage mirror
+ */
+function persistMemoryToLocalStorage() {
+  const allTxs = Array.from(memoryStore.transactions.values());
+  saveToLocalStorage(STORAGE_KEYS.TRANSACTIONS, allTxs);
+}
+
+/**
+ * Save transaction to offline store (synchronous LocalStorage + asynchronous IndexedDB)
  */
 export async function saveOfflineTransaction(recordData, currentUser = null) {
   const normalized = normalizeTransactionRecord(recordData, currentUser);
-  const db = await openOfflineDb();
 
+  // 1. Immediately store in memory and LocalStorage mirror (survives hard refresh)
+  memoryStore.transactions.set(normalized.client_id, normalized);
+  persistMemoryToLocalStorage();
+
+  // 2. Persist to IndexedDB
+  const db = await openOfflineDb();
   if (!db) {
-    memoryStore.transactions.set(normalized.client_id, normalized);
     return normalized;
   }
 
-  return new Promise((resolve, reject) => {
-    const tx = db.transaction(["transactions", "transaction_events"], "readwrite");
-    const txStore = tx.objectStore("transactions");
-    const evStore = tx.objectStore("transaction_events");
+  return new Promise((resolve) => {
+    try {
+      const tx = db.transaction(["transactions", "transaction_events"], "readwrite");
+      const txStore = tx.objectStore("transactions");
+      const evStore = tx.objectStore("transaction_events");
 
-    txStore.put(normalized);
+      txStore.put(normalized);
 
-    // Record audit event
-    const auditEvent = {
-      id: `ev_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
-      client_id: normalized.client_id,
-      transaction_id: normalized.id || null,
-      event_type: normalized.status === "Approved" ? "APPROVED" : normalized.status === "SubmittedForReview" ? "SUBMITTED" : "FIELD_CAPTURED",
-      details: {
-        reference: normalized.reference,
-        status: normalized.status,
-        sync_status: normalized.sync_status,
-      },
-      actor_id: currentUser?.id || null,
-      actor_name: currentUser?.user_metadata?.name || currentUser?.name || normalized.created_by_name || "Field Officer",
-      created_at: new Date().toISOString(),
-    };
+      // Record audit event
+      const auditEvent = {
+        id: `ev_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+        client_id: normalized.client_id,
+        transaction_id: normalized.id || null,
+        event_type: normalized.status === "Approved" ? "APPROVED" : normalized.status === "SubmittedForReview" ? "SUBMITTED" : "FIELD_CAPTURED",
+        details: {
+          reference: normalized.reference,
+          status: normalized.status,
+          sync_status: normalized.sync_status,
+        },
+        actor_id: currentUser?.id || null,
+        actor_name: currentUser?.user_metadata?.name || currentUser?.name || normalized.created_by_name || "Field Officer",
+        created_at: new Date().toISOString(),
+      };
 
-    evStore.put(auditEvent);
+      evStore.put(auditEvent);
 
-    tx.oncomplete = () => resolve(normalized);
-    tx.onerror = (e) => {
-      console.warn("IndexedDB transaction save error:", e.target.error);
-      memoryStore.transactions.set(normalized.client_id, normalized);
+      tx.oncomplete = () => resolve(normalized);
+      tx.onerror = (e) => {
+        console.warn("IndexedDB transaction save error:", e.target?.error);
+        resolve(normalized);
+      };
+    } catch (err) {
+      console.warn("IndexedDB transaction save exception:", err);
       resolve(normalized);
-    };
+    }
   });
 }
 
 /**
- * Get offline transaction by client_id
+ * Get offline transaction by client_id, id, or reference
  */
-export async function getOfflineTransaction(clientId) {
+export async function getOfflineTransaction(identifier) {
+  if (!identifier) return null;
+
+  // 1. Fast check in memory / LocalStorage
+  if (memoryStore.transactions.has(identifier)) {
+    return memoryStore.transactions.get(identifier);
+  }
+
+  // Search by reference or id in memoryStore
+  for (const record of memoryStore.transactions.values()) {
+    if (record.id === identifier || record.reference === identifier || record.client_id === identifier) {
+      return record;
+    }
+  }
+
+  // 2. Query IndexedDB
   const db = await openOfflineDb();
   if (!db) {
-    return memoryStore.transactions.get(clientId) || null;
+    return null;
   }
 
   return new Promise((resolve) => {
-    const tx = db.transaction("transactions", "readonly");
-    const store = tx.objectStore("transactions");
-    const request = store.get(clientId);
+    try {
+      const tx = db.transaction("transactions", "readonly");
+      const store = tx.objectStore("transactions");
+      const request = store.get(identifier);
 
-    request.onsuccess = () => resolve(request.result || null);
-    request.onerror = () => resolve(memoryStore.transactions.get(clientId) || null);
+      request.onsuccess = () => {
+        if (request.result) {
+          memoryStore.transactions.set(request.result.client_id, request.result);
+          persistMemoryToLocalStorage();
+          resolve(request.result);
+        } else {
+          // If not found by primary key, search all
+          const allReq = store.getAll();
+          allReq.onsuccess = () => {
+            const list = allReq.result || [];
+            const match = list.find(
+              (r) => r.client_id === identifier || r.id === identifier || r.reference === identifier
+            );
+            if (match) {
+              memoryStore.transactions.set(match.client_id, match);
+              persistMemoryToLocalStorage();
+              resolve(match);
+            } else {
+              resolve(null);
+            }
+          };
+          allReq.onerror = () => resolve(null);
+        }
+      };
+      request.onerror = () => resolve(null);
+    } catch (err) {
+      console.warn("getOfflineTransaction exception:", err);
+      resolve(null);
+    }
   });
 }
 
 /**
  * Get all offline transactions sorted by created_at descending
+ * Combines IndexedDB, LocalStorage, and memory
  */
 export async function getAllOfflineTransactions() {
   const db = await openOfflineDb();
-  if (!db) {
-    return Array.from(memoryStore.transactions.values()).sort(
-      (a, b) => new Date(b.created_at) - new Date(a.created_at)
-    );
+
+  if (db) {
+    try {
+      const idbRecords = await new Promise((resolve) => {
+        const tx = db.transaction("transactions", "readonly");
+        const store = tx.objectStore("transactions");
+        const req = store.getAll();
+        req.onsuccess = () => resolve(req.result || []);
+        req.onerror = () => resolve([]);
+      });
+
+      // Merge IndexedDB records into memoryStore and LocalStorage
+      for (const rec of idbRecords) {
+        if (rec && rec.client_id) {
+          memoryStore.transactions.set(rec.client_id, rec);
+        }
+      }
+      persistMemoryToLocalStorage();
+    } catch (err) {
+      console.warn("getAllOfflineTransactions IndexedDB merge warning:", err);
+    }
   }
 
-  return new Promise((resolve) => {
-    const tx = db.transaction("transactions", "readonly");
-    const store = tx.objectStore("transactions");
-    const request = store.getAll();
-
-    request.onsuccess = () => {
-      const results = request.result || [];
-      results.sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
-      resolve(results);
-    };
-    request.onerror = () => {
-      resolve(Array.from(memoryStore.transactions.values()));
-    };
-  });
+  const all = Array.from(memoryStore.transactions.values());
+  all.sort((a, b) => new Date(b.created_at || 0) - new Date(a.created_at || 0));
+  return all;
 }
 
 /**
@@ -357,37 +532,44 @@ export async function getPendingSyncTransactions() {
 }
 
 /**
- * Mark a transaction as synced
+ * Mark a transaction as synced.
+ * CRITICAL FIX: If the record did not exist locally (e.g. cloud-fetched on hard refresh),
+ * it is instantiated, normalized, and securely persisted locally.
  */
 export async function markTransactionSynced(clientId, serverRecord = {}) {
   const existing = await getOfflineTransaction(clientId);
-  if (!existing) return null;
+  const base = existing || normalizeTransactionRecord({ client_id: clientId, ...serverRecord });
 
   const updated = {
-    ...existing,
+    ...base,
     ...serverRecord,
     client_id: clientId,
-    id: serverRecord.id || existing.id,
+    id: serverRecord.id || base.id,
     sync_status: "synced",
     sync_error: null,
     last_sync_attempt: new Date().toISOString(),
-    sync_version: (existing.sync_version || 1) + 1,
+    sync_version: (base.sync_version || 1) + 1,
   };
 
+  // 1. Immediately store in memory and LocalStorage mirror
+  memoryStore.transactions.set(clientId, updated);
+  persistMemoryToLocalStorage();
+
+  // 2. Persist to IndexedDB
   const db = await openOfflineDb();
   if (!db) {
-    memoryStore.transactions.set(clientId, updated);
     return updated;
   }
 
   return new Promise((resolve) => {
-    const tx = db.transaction("transactions", "readwrite");
-    tx.objectStore("transactions").put(updated);
-    tx.oncomplete = () => resolve(updated);
-    tx.onerror = () => {
-      memoryStore.transactions.set(clientId, updated);
+    try {
+      const tx = db.transaction("transactions", "readwrite");
+      tx.objectStore("transactions").put(updated);
+      tx.oncomplete = () => resolve(updated);
+      tx.onerror = () => resolve(updated);
+    } catch {
       resolve(updated);
-    };
+    }
   });
 }
 
@@ -405,20 +587,23 @@ export async function markTransactionSyncFailed(clientId, errorMessage) {
     last_sync_attempt: new Date().toISOString(),
   };
 
+  memoryStore.transactions.set(clientId, updated);
+  persistMemoryToLocalStorage();
+
   const db = await openOfflineDb();
   if (!db) {
-    memoryStore.transactions.set(clientId, updated);
     return updated;
   }
 
   return new Promise((resolve) => {
-    const tx = db.transaction("transactions", "readwrite");
-    tx.objectStore("transactions").put(updated);
-    tx.oncomplete = () => resolve(updated);
-    tx.onerror = () => {
-      memoryStore.transactions.set(clientId, updated);
+    try {
+      const tx = db.transaction("transactions", "readwrite");
+      tx.objectStore("transactions").put(updated);
+      tx.oncomplete = () => resolve(updated);
+      tx.onerror = () => resolve(updated);
+    } catch {
       resolve(updated);
-    };
+    }
   });
 }
 
@@ -426,17 +611,23 @@ export async function markTransactionSyncFailed(clientId, errorMessage) {
  * Delete a transaction from the offline store
  */
 export async function deleteOfflineTransaction(clientId) {
+  memoryStore.transactions.delete(clientId);
+  persistMemoryToLocalStorage();
+
   const db = await openOfflineDb();
   if (!db) {
-    memoryStore.transactions.delete(clientId);
     return true;
   }
 
   return new Promise((resolve) => {
-    const tx = db.transaction("transactions", "readwrite");
-    tx.objectStore("transactions").delete(clientId);
-    tx.oncomplete = () => resolve(true);
-    tx.onerror = () => resolve(false);
+    try {
+      const tx = db.transaction("transactions", "readwrite");
+      tx.objectStore("transactions").delete(clientId);
+      tx.oncomplete = () => resolve(true);
+      tx.onerror = () => resolve(false);
+    } catch {
+      resolve(false);
+    }
   });
 }
 
@@ -445,18 +636,27 @@ export async function deleteOfflineTransaction(clientId) {
  */
 export async function cacheCounterparties(partiesList) {
   if (!Array.isArray(partiesList)) return;
+
+  partiesList.forEach((p) => {
+    if (p && p.id) {
+      memoryStore.parties.set(p.id, p);
+    }
+  });
+  saveToLocalStorage(STORAGE_KEYS.PARTIES, Array.from(memoryStore.parties.values()));
+
   const db = await openOfflineDb();
-  if (!db) {
-    partiesList.forEach((p) => memoryStore.parties.set(p.id, p));
-    return;
-  }
+  if (!db) return;
 
   return new Promise((resolve) => {
-    const tx = db.transaction("cached_parties", "readwrite");
-    const store = tx.objectStore("cached_parties");
-    partiesList.forEach((p) => store.put(p));
-    tx.oncomplete = () => resolve(true);
-    tx.onerror = () => resolve(false);
+    try {
+      const tx = db.transaction("cached_parties", "readwrite");
+      const store = tx.objectStore("cached_parties");
+      partiesList.forEach((p) => store.put(p));
+      tx.oncomplete = () => resolve(true);
+      tx.onerror = () => resolve(false);
+    } catch {
+      resolve(false);
+    }
   });
 }
 
@@ -465,17 +665,25 @@ export async function cacheCounterparties(partiesList) {
  */
 export async function getCachedParties() {
   const db = await openOfflineDb();
-  if (!db) {
-    return Array.from(memoryStore.parties.values());
+  if (db) {
+    try {
+      const idbParties = await new Promise((resolve) => {
+        const tx = db.transaction("cached_parties", "readonly");
+        const store = tx.objectStore("cached_parties");
+        const req = store.getAll();
+        req.onsuccess = () => resolve(req.result || []);
+        req.onerror = () => resolve([]);
+      });
+      if (Array.isArray(idbParties) && idbParties.length > 0) {
+        idbParties.forEach((p) => memoryStore.parties.set(p.id, p));
+        saveToLocalStorage(STORAGE_KEYS.PARTIES, Array.from(memoryStore.parties.values()));
+      }
+    } catch (err) {
+      console.warn("getCachedParties IndexedDB warning:", err);
+    }
   }
 
-  return new Promise((resolve) => {
-    const tx = db.transaction("cached_parties", "readonly");
-    const store = tx.objectStore("cached_parties");
-    const req = store.getAll();
-    req.onsuccess = () => resolve(req.result || []);
-    req.onerror = () => resolve(Array.from(memoryStore.parties.values()));
-  });
+  return Array.from(memoryStore.parties.values());
 }
 
 /**
@@ -501,7 +709,7 @@ export async function getOfflineStats() {
 
 export const BENCHMARK_MATRIX_SEEDS = [
   {
-    client_id: "mat_seed_001",
+    client_id: "00000000-0000-4000-8000-000000000001",
     reference: "MAT-20261111-001",
     is_matrix_record: true,
     commodity: "Maize",
@@ -526,7 +734,7 @@ export const BENCHMARK_MATRIX_SEEDS = [
     updated_at: "2026-11-10T10:00:00Z",
   },
   {
-    client_id: "mat_seed_002",
+    client_id: "00000000-0000-4000-8000-000000000002",
     reference: "MAT-20261111-002",
     is_matrix_record: true,
     commodity: "Soybeans",
@@ -541,7 +749,7 @@ export const BENCHMARK_MATRIX_SEEDS = [
     total_costs: 825000,
     net_margin: 35175000,
     margin_percentage: 97.71,
-    status: "Awaiting Review",
+    status: "SubmittedForReview",
     buyer_name: "Lira Oil Extractors",
     supplier_name: "Nwoya Producers Association",
     district: "Nwoya",
@@ -557,7 +765,10 @@ export const BENCHMARK_MATRIX_SEEDS = [
  */
 export async function saveMatrixRecord(recordData, currentUser = null) {
   const now = new Date().toISOString();
-  const clientId = recordData.client_id || (typeof crypto !== "undefined" && crypto.randomUUID ? crypto.randomUUID() : `mat_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`);
+  let clientId = recordData.client_id;
+  if (!isValidUUID(clientId)) {
+    clientId = generateUUID();
+  }
   const reference = recordData.reference || generateMatrixReference();
   const createdByName = recordData.created_by_name || currentUser?.name || currentUser?.email || "Deal Desk Analyst";
 
@@ -567,7 +778,7 @@ export async function saveMatrixRecord(recordData, currentUser = null) {
     reference: reference,
     is_matrix_record: true,
     created_by_name: createdByName,
-    created_by: recordData.created_by || currentUser?.id || null,
+    created_by: isValidUUID(recordData.created_by) ? recordData.created_by : (isValidUUID(currentUser?.id) ? currentUser.id : null),
     status: recordData.status || "Draft",
     commodity: recordData.commodity || "Maize",
     volume: Number(recordData.volume) || 0,

@@ -187,7 +187,7 @@ function DealsPage() {
                       children: [
                         jsx.jsx(SelectTrigger, { children: jsx.jsx(SelectValue, {}) }),
                         jsx.jsx(SelectContent, {
-                          children: ["Maize", "Beans", "Soybeans", "Sorghum", "Rice", "Cassava"].map((c) =>
+                          children: ["Maize", "Beans", "Soybeans", "Sorghum", "Rice", "Cassava", "Sunflower"].map((c) =>
                             jsx.jsx(SelectItem, { value: c, children: c }, c)
                           ),
                         }),

@@ -24,7 +24,7 @@ const { useState, useEffect, useMemo, useCallback } = React;
 const { jsx, jsxs } = jsxRuntime();
 
 // Master Commodities & Districts
-const COMMODITIES = ["Maize", "Beans", "Soybeans", "Sorghum", "Rice", "Cassava"];
+const COMMODITIES = ["Maize", "Beans", "Soybeans", "Sorghum", "Rice", "Cassava", "Sunflower"];
 const DISTRICTS = ["Amuru", "Gulu", "Lira", "Nwoya", "Oyam", "Kitgum", "Apac", "Dokolo", "Kole", "Pader"];
 
 // Minimum fee floor and overhead rule
@@ -72,9 +72,19 @@ export default function TransactionModule() {
         setIsAdmin(user?.role === "admin" || user?.email?.toLowerCase().includes("clarence") || user?.username?.toLowerCase().includes("clarence"));
       }
 
-      // Load transactions from offline store (which mirrors cloud)
-      const allTx = await getAllOfflineTransactions();
-      setTransactions(allTx);
+      // Load transactions from offline store (which mirrors cloud and survives hard refresh)
+      const localTx = await getAllOfflineTransactions();
+      if (localTx && localTx.length > 0) {
+        setTransactions(localTx);
+      }
+
+      // Reconcile with remote Supabase transactions if online
+      if (typeof navigator === "undefined" || navigator.onLine) {
+        const merged = await syncEngine.fetchCloudAndMerge();
+        setTransactions(merged);
+      } else {
+        setTransactions(localTx);
+      }
 
       const st = await getOfflineStats();
       setStats(st);
@@ -318,7 +328,7 @@ export default function TransactionModule() {
 
       // Trigger background sync if online
       if (syncState.isOnline) {
-        syncEngine.syncPendingTransactions().catch(() => {});
+        syncEngine.syncPendingTransactions().then(() => refreshData()).catch(() => {});
       }
     } catch (err) {
       showToast(`Error saving draft: ${err.message}`, "error");
@@ -363,7 +373,7 @@ export default function TransactionModule() {
       await refreshData();
 
       if (syncState.isOnline) {
-        syncEngine.syncPendingTransactions().catch(() => {});
+        syncEngine.syncPendingTransactions().then(() => refreshData()).catch(() => {});
       }
     } catch (err) {
       showToast(`Submission error: ${err.message}`, "error");
@@ -401,7 +411,7 @@ export default function TransactionModule() {
       await refreshData();
 
       if (syncState.isOnline) {
-        syncEngine.syncPendingTransactions().catch(() => {});
+        syncEngine.syncPendingTransactions().then(() => refreshData()).catch(() => {});
       }
     } catch (err) {
       showToast(`Approval error: ${err.message}`, "error");

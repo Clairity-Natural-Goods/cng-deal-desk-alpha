@@ -3,7 +3,8 @@
  *   CNG DEAL DESK ALPHA V2 — OFFLINE SYNCHRONIZATION ENGINE
  *   Module: assets/offline/syncEngine.js
  *   Purpose: Manages network connectivity states, offline-to-cloud sync queue,
- *            idempotent Supabase persistence, retry backoff, and event listeners.
+ *            idempotent Supabase persistence, foreign-key safe upserts, retry backoff,
+ *            and cloud reconciliation on hard refresh.
  * ==============================================================================
  */
 
@@ -14,7 +15,36 @@ import {
   markTransactionSyncFailed,
   getOfflineStats,
   getAllOfflineTransactions,
+  isValidUUID,
+  generateUUID,
 } from "./offlineStore.js";
+
+const VALID_TRANSACTION_STATUSES = [
+  "Draft",
+  "FieldCaptured",
+  "DealPackIncomplete",
+  "DealPackComplete",
+  "SubmittedForReview",
+  "PendingApproval",
+  "Approved",
+  "Rejected",
+];
+
+function sanitizeForeignKey(val) {
+  if (!val || val === "none") return null;
+  if (typeof val === "string" && val.trim().length > 0) {
+    return val.trim();
+  }
+  return null;
+}
+
+function normalizeStatusForPostgres(status) {
+  if (!status) return "Draft";
+  if (VALID_TRANSACTION_STATUSES.includes(status)) return status;
+  if (status === "Awaiting Review") return "SubmittedForReview";
+  if (status === "Ready") return "Approved";
+  return "Draft";
+}
 
 class SyncEngine {
   constructor() {
@@ -110,38 +140,62 @@ class SyncEngine {
 
       for (const record of pendingList) {
         try {
-          // Prepare clean payload for Supabase
+          let syncClientId = record.client_id;
+          if (!isValidUUID(syncClientId)) {
+            if (syncClientId === "mat_seed_001") {
+              syncClientId = "00000000-0000-4000-8000-000000000001";
+            } else if (syncClientId === "mat_seed_002") {
+              syncClientId = "00000000-0000-4000-8000-000000000002";
+            } else {
+              syncClientId = generateUUID();
+            }
+          }
+
+          // Prepare clean, schema-safe payload for Supabase
           const payload = {
-            client_id: record.client_id,
+            client_id: syncClientId,
             reference: record.reference,
-            created_by: record.created_by,
-            created_by_name: record.created_by_name,
-            status: record.status,
-            buyer_id: record.buyer_id,
-            supplier_id: record.supplier_id,
-            commodity: record.commodity,
-            buyer_requirements: record.buyer_requirements,
-            supplier_verification: record.supplier_verification,
-            transport_collection: record.transport_collection,
-            payment_terms: record.payment_terms,
-            fee_margin: record.fee_margin,
-            decision_matrix: record.decision_matrix,
-            approval: record.approval,
-            notes: record.notes,
+            created_by: isValidUUID(record.created_by) ? record.created_by : null,
+            created_by_name: record.created_by_name || "Field Officer",
+            status: normalizeStatusForPostgres(record.status),
+            buyer_id: sanitizeForeignKey(record.buyer_id),
+            supplier_id: sanitizeForeignKey(record.supplier_id),
+            commodity: record.commodity || "Maize",
+            buyer_requirements: record.buyer_requirements || {},
+            supplier_verification: record.supplier_verification || {},
+            transport_collection: record.transport_collection || {},
+            payment_terms: record.payment_terms || {},
+            fee_margin: record.fee_margin || {},
+            decision_matrix: record.decision_matrix || {},
+            approval: record.approval || {},
+            notes: record.notes || "",
             sync_version: record.sync_version || 1,
             created_at: record.created_at,
             updated_at: new Date().toISOString(),
           };
 
           // Perform idempotent upsert on client_id
-          const { data, error } = await supabase
+          let { data, error } = await supabase
             .from("transactions")
             .upsert(payload, { onConflict: "client_id" })
             .select()
             .single();
 
+          // Foreign Key defense: if party ID does not exist, retry with detached party IDs
+          if (error && (error.code === "23503" || String(error.message).includes("foreign key"))) {
+            console.warn(`Foreign key defense triggered for ${record.reference}. Detaching unverified party IDs.`);
+            payload.buyer_id = null;
+            payload.supplier_id = null;
+            const retryRes = await supabase
+              .from("transactions")
+              .upsert(payload, { onConflict: "client_id" })
+              .select()
+              .single();
+            data = retryRes.data;
+            error = retryRes.error;
+          }
+
           if (error) {
-            // Check if error is schema cache notice or network failure
             console.warn(`Sync failed for ${record.reference}:`, error.message);
             await markTransactionSyncFailed(record.client_id, error.message);
             failedCount++;
@@ -172,7 +226,8 @@ class SyncEngine {
   }
 
   /**
-   * Fetch all transactions from cloud (if online) and merge with local offline store
+   * Fetch all transactions from cloud (if online) and reconcile with local offline store.
+   * Guarantees that upon hard refresh, remote records are safely stored locally.
    */
   async fetchCloudAndMerge() {
     if (!this.isOnline) {
@@ -192,8 +247,9 @@ class SyncEngine {
 
       if (Array.isArray(data)) {
         for (const remoteRecord of data) {
-          if (remoteRecord.client_id) {
-            await markTransactionSynced(remoteRecord.client_id, remoteRecord);
+          const cid = remoteRecord.client_id || remoteRecord.id;
+          if (cid) {
+            await markTransactionSynced(cid, remoteRecord);
           }
         }
       }

@@ -20,6 +20,7 @@ export const COMMODITIES = [
   { name: "Sorghum", category: "Grains", defaultUnit: "MT", basePriceUnit: "UGX/KG" },
   { name: "Rice", category: "Grains", defaultUnit: "MT", basePriceUnit: "UGX/KG" },
   { name: "Cassava", category: "Tubers / Flour", defaultUnit: "MT", basePriceUnit: "UGX/KG" },
+  { name: "Sunflower", category: "Oilseeds", defaultUnit: "MT", basePriceUnit: "UGX/KG" },
 ];
 
 /**

@@ -131,9 +131,16 @@ export default function DecisionMatrixModule() {
         console.warn("Party load notice:", err);
       }
 
-      // Load Matrix records
-      const allRecords = await getAllMatrixRecords();
+      // 1. Load Matrix records locally for immediate display (survives hard refresh)
+      let allRecords = await getAllMatrixRecords();
       setRecords(allRecords);
+
+      // 2. Reconcile with remote Supabase transactions if online
+      if (typeof navigator === "undefined" || navigator.onLine) {
+        await syncEngine.fetchCloudAndMerge();
+        allRecords = await getAllMatrixRecords();
+        setRecords(allRecords);
+      }
 
       const st = await getMatrixStats();
       setStats(st);
@@ -353,6 +360,9 @@ export default function DecisionMatrixModule() {
       await saveMatrixRecord(recordPayload, currentUser);
       showToast(`Transaction ${recordPayload.reference} saved successfully as ${targetStatus}.`, "success");
       await loadData();
+      if (syncState.isOnline) {
+        syncEngine.syncPendingTransactions().then(() => loadData()).catch(() => {});
+      }
       setActiveTab("grid");
     } catch (err) {
       console.error("Save matrix error:", err);
