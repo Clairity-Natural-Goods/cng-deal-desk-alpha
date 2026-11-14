@@ -204,9 +204,11 @@ function createEntityRepository(entityName) {
       const record = {
         id,
         created_date: payload.created_date || now,
-        updated_date: payload.updated_date || now,
         ...payload,
       };
+      if (tableName !== "deal_events" && tableName !== "transaction_events" && tableName !== "disclosure_audit_logs") {
+        record.updated_date = payload.updated_date || now;
+      }
 
       const { data, error } = await supabase
         .from(tableName)
@@ -330,12 +332,17 @@ function createEntityRepository(entityName) {
     async bulkCreate(records = []) {
       if (!Array.isArray(records) || records.length === 0) return [];
       const now = new Date().toISOString();
-      const sanitized = records.map((r) => ({
-        id: r.id || generateRecordId(),
-        created_date: r.created_date || now,
-        updated_date: r.updated_date || now,
-        ...r,
-      }));
+      const sanitized = records.map((r) => {
+        const item = {
+          id: r.id || generateRecordId(),
+          created_date: r.created_date || now,
+          ...r,
+        };
+        if (tableName !== "deal_events" && tableName !== "transaction_events" && tableName !== "disclosure_audit_logs") {
+          item.updated_date = r.updated_date || now;
+        }
+        return item;
+      });
 
       const { data, error } = await supabase
         .from(tableName)
