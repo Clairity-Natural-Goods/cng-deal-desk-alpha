@@ -74,7 +74,7 @@ export default function TransactionModule() {
         setIsAdmin(user?.role === "admin" || user?.email?.toLowerCase().includes("clarence") || user?.username?.toLowerCase().includes("clarence"));
       }
 
-      // Fetch transactions directly from Supabase PostgreSQL database
+      // 1. Fetch transactions directly from Supabase PostgreSQL database
       let dbTransactions = [];
       try {
         const { data, error } = await supabase
@@ -89,20 +89,58 @@ export default function TransactionModule() {
         console.warn("Direct cloud fetch notice:", cloudErr);
       }
 
-      if (dbTransactions.length > 0) {
-        setTransactions(dbTransactions);
-        for (const remote of dbTransactions) {
-          if (remote.client_id) {
-            await markTransactionSynced(remote.client_id, remote);
-          }
+      // 2. Fetch all offline transactions from local store (IndexedDB / LocalStorage)
+      const localTransactions = await getAllOfflineTransactions();
+
+      // 3. Reconcile & Merge remote and local transactions
+      const mergedMap = new Map();
+
+      // Remote records take precedence for confirmed server data
+      for (const remote of dbTransactions) {
+        const key = remote.client_id || remote.id;
+        if (key) {
+          const item = {
+            ...remote,
+            status: remote.status || "Draft",
+            sync_status: remote.sync_status || (remote.status === "Draft" ? "pending_sync" : "synced"),
+          };
+          mergedMap.set(key, item);
+          await markTransactionSynced(key, item);
         }
-      } else {
-        const localTx = await getAllOfflineTransactions();
-        setTransactions(localTx);
       }
 
-      const st = await getOfflineStats();
-      setStats(st);
+      // Local records add un-synced drafts or retain pending_sync status
+      for (const local of localTransactions) {
+        const key = local.client_id || local.id;
+        if (key) {
+          if (!mergedMap.has(key)) {
+            mergedMap.set(key, local);
+          } else {
+            const existing = mergedMap.get(key);
+            // If local copy has pending_sync or Draft, retain pending_sync
+            if (local.sync_status === "pending_sync" || local.status === "Draft") {
+              mergedMap.set(key, { ...existing, ...local, sync_status: local.sync_status || "pending_sync" });
+            }
+          }
+        }
+      }
+
+      const mergedList = Array.from(mergedMap.values());
+      mergedList.sort((a, b) => new Date(b.created_at || b.updated_at || 0) - new Date(a.created_at || a.updated_at || 0));
+
+      setTransactions(mergedList);
+
+      // 4. Compute authoritative dashboard stats directly from the merged dataset
+      const calculatedStats = {
+        total: mergedList.length,
+        pending_sync: mergedList.filter((t) => t.sync_status === "pending_sync" || (t.status === "Draft" && t.sync_status !== "synced")).length,
+        sync_failed: mergedList.filter((t) => t.sync_status === "sync_failed").length,
+        synced: mergedList.filter((t) => t.sync_status === "synced" && t.status !== "Draft").length,
+        drafts: mergedList.filter((t) => t.status === "Draft" || t.status === "FieldCaptured").length,
+        approved: mergedList.filter((t) => t.status === "Approved").length,
+      };
+
+      setStats(calculatedStats);
 
       // Load parties
       if (db?.entities?.Party) {
@@ -248,6 +286,11 @@ export default function TransactionModule() {
 
     setSelectedTx(newTx);
     setActiveSection(1);
+    // Persist new draft immediately to offline store and attempt background Supabase save
+    saveOfflineTransaction(newTx, currentUser).then(() => {
+      saveTransactionToSupabase(newTx, currentUser).catch(() => {});
+      refreshData();
+    });
   };
 
   // Recalculate economics dynamically when tonnes or fees change

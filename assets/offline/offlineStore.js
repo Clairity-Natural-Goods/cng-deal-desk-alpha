@@ -545,7 +545,8 @@ export async function markTransactionSynced(clientId, serverRecord = {}) {
     ...serverRecord,
     client_id: clientId,
     id: serverRecord.id || base.id,
-    sync_status: "synced",
+    status: serverRecord.status || base.status || "Draft",
+    sync_status: serverRecord.sync_status || "synced",
     sync_error: null,
     last_sync_attempt: new Date().toISOString(),
     sync_version: (base.sync_version || 1) + 1,
@@ -693,10 +694,10 @@ export async function getOfflineStats() {
   const all = await getAllOfflineTransactions();
   return {
     total: all.length,
-    pending_sync: all.filter((t) => t.sync_status === "pending_sync").length,
+    pending_sync: all.filter((t) => t.sync_status === "pending_sync" || (t.status === "Draft" && t.sync_status !== "synced")).length,
     sync_failed: all.filter((t) => t.sync_status === "sync_failed").length,
-    synced: all.filter((t) => t.sync_status === "synced").length,
-    drafts: all.filter((t) => t.status === "Draft").length,
+    synced: all.filter((t) => t.sync_status === "synced" && t.status !== "Draft").length,
+    drafts: all.filter((t) => t.status === "Draft" || t.status === "FieldCaptured").length,
     approved: all.filter((t) => t.status === "Approved").length,
   };
 }

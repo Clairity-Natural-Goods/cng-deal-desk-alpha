@@ -62,12 +62,15 @@ export async function saveTransactionToSupabase(record, currentUser = null) {
     }
   }
 
+  const syncStatus = record.sync_status || (record.status === "Draft" ? "pending_sync" : "synced");
+
   const payload = {
     client_id: syncClientId,
     reference: record.reference,
     created_by: isValidUUID(record.created_by) ? record.created_by : (isValidUUID(currentUser?.id) ? currentUser.id : null),
     created_by_name: record.created_by_name || currentUser?.name || currentUser?.email || "Field Officer",
     status: normalizeStatusForPostgres(record.status),
+    sync_status: syncStatus,
     buyer_id: sanitizeForeignKey(record.buyer_id),
     supplier_id: sanitizeForeignKey(record.supplier_id),
     commodity: record.commodity || "Maize",
@@ -226,6 +229,7 @@ class SyncEngine {
             created_by: isValidUUID(record.created_by) ? record.created_by : null,
             created_by_name: record.created_by_name || "Field Officer",
             status: normalizeStatusForPostgres(record.status),
+            sync_status: record.sync_status || (record.status === "Draft" ? "pending_sync" : "synced"),
             buyer_id: sanitizeForeignKey(record.buyer_id),
             supplier_id: sanitizeForeignKey(record.supplier_id),
             commodity: record.commodity || "Maize",

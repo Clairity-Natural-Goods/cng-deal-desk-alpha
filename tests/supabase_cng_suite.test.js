@@ -53,6 +53,7 @@ import {
   saveOfflineTransaction,
   getOfflineTransaction,
   getAllOfflineTransactions,
+  getOfflineStats,
   normalizeTransactionRecord,
   markTransactionSynced,
   saveMatrixRecord,
@@ -1685,6 +1686,34 @@ runTest("PERSIST-04", "Database Persistence - Incomplete draft transactions are 
   assert.ok(stored, "Incomplete draft must be saved and retrievable");
   assert.strictEqual(stored.status, "Draft");
   assert.strictEqual(stored.commodity, "Sunflower");
+});
+
+// PERSIST-05: Pending Sync and Draft Preservation Across Hard Refresh
+runTest("PERSIST-05", "Pending Sync & Draft Preservation - Preserves pending_sync and draft status in dashboard and backend", async () => {
+  const pendingId = "55555555-6666-4777-8888-999999999999";
+  const draftTx = {
+    client_id: pendingId,
+    commodity: "Maize",
+    status: "Draft",
+    sync_status: "pending_sync",
+    buyer_requirements: { buyer_name: "Amuru Millers", required_tonnes: 20 },
+  };
+
+  const normalized = normalizeTransactionRecord(draftTx);
+  assert.strictEqual(normalized.status, "Draft");
+  assert.strictEqual(normalized.sync_status, "pending_sync", "Drafts must default to pending_sync");
+
+  // Save to offline store
+  await saveOfflineTransaction(normalized);
+  
+  // Simulate cloud fetch reconciliation (markTransactionSynced must NOT wipe pending_sync on drafts)
+  const reconciled = await markTransactionSynced(pendingId, normalized);
+  assert.strictEqual(reconciled.sync_status, "pending_sync", "Reconciliation must preserve pending_sync on draft transactions");
+  assert.strictEqual(reconciled.status, "Draft", "Reconciliation must preserve Draft status");
+
+  const stats = await getOfflineStats();
+  assert.ok(stats.pending_sync >= 1, "Pending sync count must be at least 1 when drafts are present");
+  assert.ok(stats.drafts >= 1, "Draft count must be at least 1 when drafts are present");
 });
 
 // ==============================================================================
