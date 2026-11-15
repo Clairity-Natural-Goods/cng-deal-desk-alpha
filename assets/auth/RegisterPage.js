@@ -12,62 +12,88 @@ function setupPasswordToggles(container) {
       input.type = isPassword ? "text" : "password";
       btn.innerHTML = isPassword ? EYE_OFF_ICON : EYE_ICON;
       btn.setAttribute("aria-label", isPassword ? "Hide password" : "Show password");
-      btn.style.color = isPassword ? "#047857" : "#64748b";
+      btn.style.color = isPassword ? "#60a5fa" : "rgba(255, 255, 255, 0.85)";
     });
   });
 }
 
 export function renderRegisterPage(container, { onRegister, onLogin }) {
   container.innerHTML = `
-    <main class="auth-card" aria-labelledby="auth-title">
-      <div class="auth-brand">CNG Deal Desk</div>
-      <h1 id="auth-title">Create your account</h1>
-      <p class="auth-subtitle">Register a secure verified account with Supabase Auth.</p>
-      <form id="auth-register-form" novalidate>
-        <label>Full name<input name="name" autocomplete="name" required placeholder="e.g. Christine Auma"></label>
-        <label>Email<input name="email" type="email" autocomplete="email" required placeholder="name@company.com"></label>
-        <label>Username<input name="username" autocomplete="username" required placeholder="e.g. christine"></label>
-        <label>Password
-          <div class="auth-password-wrapper">
-            <input name="password" type="password" autocomplete="new-password" required>
-            <button type="button" class="auth-toggle-password" aria-label="Show password"></button>
-          </div>
-        </label>
-        <p class="auth-hint">At least 8 characters with numbers and letters.</p>
-        <label>Confirm password
-          <div class="auth-password-wrapper">
-            <input name="confirmPassword" type="password" autocomplete="new-password" required>
-            <button type="button" class="auth-toggle-password" aria-label="Show password"></button>
-          </div>
-        </label>
-        <p class="auth-error" role="alert" aria-live="polite"></p>
-        <button class="auth-submit" type="submit">Create account</button>
-      </form>
-      <p class="auth-switch">Already registered? <a href="/login" data-auth-nav>Sign in</a></p>
-    </main>`;
+    <div class="auth-layout-container">
+      <!-- Left Hero Branding -->
+      <section class="auth-hero-section">
+        <div class="auth-hero-title">
+          <span>CNG</span>
+          <span>GLOBAL</span>
+        </div>
+        <p class="auth-hero-tagline">Buy, sell commodity at affordable price.</p>
+      </section>
+
+      <!-- Right Glassmorphic Card -->
+      <section class="auth-card-section auth-slide-diagonal-in">
+        <main class="auth-glass-card auth-card" aria-labelledby="auth-title">
+          <h1 id="auth-title" class="auth-card-brand">CNG GLOBAL</h1>
+          <p class="auth-card-subhead">Create your Deal Desk account</p>
+          <form id="auth-register-form" class="auth-form" novalidate>
+            <label>
+              <span>Full Name</span>
+              <input name="name" autocomplete="name" required placeholder="e.g. Christine Auma">
+            </label>
+            <label>
+              <span>Email</span>
+              <input name="email" type="email" autocomplete="email" required placeholder="name@company.com">
+            </label>
+            <label>
+              <span>Username</span>
+              <input name="username" autocomplete="username" required placeholder="e.g. christine">
+            </label>
+            <label>
+              <span>Password</span>
+              <div class="auth-password-wrapper">
+                <input name="password" type="password" autocomplete="new-password" required placeholder="••••••••••••">
+                <button type="button" class="auth-toggle-password" aria-label="Show password"></button>
+              </div>
+            </label>
+            <p class="auth-hint">At least 8 characters with numbers and letters.</p>
+            <label>
+              <span>Confirm Password</span>
+              <div class="auth-password-wrapper">
+                <input name="confirmPassword" type="password" autocomplete="new-password" required placeholder="••••••••••••">
+                <button type="button" class="auth-toggle-password" aria-label="Show password"></button>
+              </div>
+            </label>
+            <p class="auth-error" role="alert" aria-live="polite"></p>
+            <button class="auth-submit-btn auth-submit" type="submit">CREATE ACCOUNT</button>
+          </form>
+          <p class="auth-switch-text auth-switch">Already registered? <a href="/login" data-auth-nav>Sign in</a></p>
+        </main>
+      </section>
+    </div>`;
 
   const form = container.querySelector("form");
   setupPasswordToggles(form);
 
   form.addEventListener("submit", async (event) => {
     event.preventDefault();
-    const button = form.querySelector("button");
+    const button = form.querySelector("button[type='submit']");
     const error = form.querySelector(".auth-error");
     const data = new FormData(form);
     const password = String(data.get("password") || "");
     const confirmPassword = String(data.get("confirmPassword") || "");
 
     if (password.length < 8) {
+      error.style.color = "#fca5a5";
       error.textContent = "Password must be at least 8 characters.";
       return;
     }
     if (password !== confirmPassword) {
+      error.style.color = "#fca5a5";
       error.textContent = "Passwords do not match.";
       return;
     }
 
     button.disabled = true;
-    button.textContent = "Creating account…";
+    button.textContent = "CREATING ACCOUNT…";
     error.textContent = "";
 
     try {
@@ -79,14 +105,27 @@ export function renderRegisterPage(container, { onRegister, onLogin }) {
         confirmPassword,
       });
     } catch (reason) {
+      error.style.color = "#fca5a5";
       error.textContent = reason.message || "Unable to create account.";
       button.disabled = false;
-      button.textContent = "Create account";
+      button.textContent = "CREATE ACCOUNT";
     }
   });
 
-  container.querySelector("[data-auth-nav]").addEventListener("click", (event) => {
-    event.preventDefault();
-    onLogin();
-  });
+  const navLink = container.querySelector("[data-auth-nav]");
+  if (navLink) {
+    navLink.addEventListener("click", (event) => {
+      event.preventDefault();
+      const cardSection = container.querySelector(".auth-card-section");
+      if (cardSection) {
+        cardSection.classList.remove("auth-slide-diagonal-in");
+        cardSection.classList.add("auth-slide-diagonal-out");
+        setTimeout(() => {
+          onLogin();
+        }, 220);
+      } else {
+        onLogin();
+      }
+    });
+  }
 }

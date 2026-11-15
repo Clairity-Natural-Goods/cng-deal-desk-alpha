@@ -54,36 +54,341 @@ function installSupabaseAdapter() {
 function addStyles() {
   const style = document.createElement("style");
   style.textContent = `
-    #${AUTH_ID} { position: fixed; inset: 0; z-index: 2147483000; display: grid; place-items: center; overflow: auto; padding: 24px; background: #f8fafc; color: #0f172a; font: 14px/1.5 system-ui, -apple-system, sans-serif; transition: background-color 0.2s ease, color 0.2s ease; }
+    #${AUTH_ID} {
+      position: fixed;
+      inset: 0;
+      z-index: 2147483000;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      overflow-y: auto;
+      overflow-x: hidden;
+      padding: 24px 16px;
+      box-sizing: border-box;
+      background: #090e17 url('/assets/auth-bg.jpg') center center / cover no-repeat fixed;
+      color: #ffffff;
+      font: 14px/1.5 system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      -webkit-font-smoothing: antialiased;
+    }
     #${AUTH_ID}[hidden] { display: none; }
-    #${AUTH_ID} .auth-card { box-sizing: border-box; width: min(100%, 440px); padding: 32px; border: 1px solid #e2e8f0; border-radius: 16px; background: white; box-shadow: 0 16px 48px #0f172a14; transition: background-color 0.2s ease, border-color 0.2s ease; }
-    #${AUTH_ID} .auth-brand { color: #047857; font-size: 13px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; }
-    #${AUTH_ID} h1 { margin: 14px 0 4px; font-size: 26px; font-weight: 700; line-height: 1.2; letter-spacing: -0.02em; }
-    #${AUTH_ID} .auth-subtitle, #${AUTH_ID} .auth-switch { color: #64748b; font-size: 13.5px; }
-    #${AUTH_ID} form { display: grid; gap: 14px; margin-top: 24px; }
-    #${AUTH_ID} label { display: grid; gap: 6px; color: #334155; font-weight: 600; font-size: 13px; }
-    #${AUTH_ID} .auth-password-wrapper { position: relative; display: flex; align-items: center; width: 100%; }
-    #${AUTH_ID} .auth-password-wrapper input { padding-right: 42px; }
-    #${AUTH_ID} .auth-toggle-password { position: absolute; right: 8px; top: 50%; transform: translateY(-50%); background: none; border: none; padding: 4px; cursor: pointer; color: #64748b; display: flex; align-items: center; justify-content: center; border-radius: 6px; transition: color 0.15s ease, background-color 0.15s ease; }
-    #${AUTH_ID} .auth-toggle-password:hover { color: #047857; background: #f1f5f9; }
-    #${AUTH_ID} .auth-toggle-password:focus-visible { outline: 2px solid #047857; outline-offset: 1px; }
-    #${AUTH_ID} input, #${AUTH_ID} select { box-sizing: border-box; width: 100%; min-height: 42px; padding: 9px 12px; border: 1px solid #cbd5e1; border-radius: 8px; background: white; color: #0f172a; font: inherit; transition: border-color 0.15s ease, background-color 0.15s ease; }
-    #${AUTH_ID} input:focus, #${AUTH_ID} select:focus { outline: 2px solid #047857; outline-offset: 1px; }
-    #${AUTH_ID} .auth-hint { margin: -6px 0 0; color: #64748b; font-size: 12px; }
-    #${AUTH_ID} .auth-error { min-height: 20px; margin: 0; color: #b91c1c; font-size: 13px; font-weight: 500; }
-    #${AUTH_ID} .auth-submit { min-height: 44px; border: 0; border-radius: 8px; background: #047857; color: white; font: inherit; font-weight: 600; cursor: pointer; transition: background-color 0.15s ease; }
-    #${AUTH_ID} .auth-submit:hover { background: #065f46; }
-    #${AUTH_ID} .auth-submit:disabled { cursor: wait; opacity: .7; }
-    #${AUTH_ID} .auth-switch { margin: 20px 0 0; text-align: center; }
-    #${AUTH_ID} a { color: #047857; font-weight: 600; }
-    
-    /* Dark Theme Support */
-    html.dark #${AUTH_ID}, [data-theme="dark"] #${AUTH_ID} { background: #07150e; color: #f1f5f9; }
-    html.dark #${AUTH_ID} .auth-card, [data-theme="dark"] #${AUTH_ID} .auth-card { background: #0c2016; border-color: #1a3d2c; box-shadow: 0 16px 48px #00000060; }
-    html.dark #${AUTH_ID} input, html.dark #${AUTH_ID} select, [data-theme="dark"] #${AUTH_ID} input, [data-theme="dark"] #${AUTH_ID} select { background: #081710; border-color: #1a3d2c; color: #f8fafc; }
-    html.dark #${AUTH_ID} label, [data-theme="dark"] #${AUTH_ID} label { color: #94a3b8; }
-    html.dark #${AUTH_ID} .auth-subtitle, html.dark #${AUTH_ID} .auth-switch, [data-theme="dark"] #${AUTH_ID} .auth-subtitle, [data-theme="dark"] #${AUTH_ID} .auth-switch { color: #64748b; }
-    html.dark #${AUTH_ID} .auth-toggle-password:hover, [data-theme="dark"] #${AUTH_ID} .auth-toggle-password:hover { background: #132e21; color: #34d399; }
+
+    /* Main two-column responsive layout */
+    #${AUTH_ID} .auth-layout-container {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      width: 100%;
+      max-width: 1120px;
+      margin: auto;
+      gap: 48px;
+      min-height: calc(100vh - 48px);
+      box-sizing: border-box;
+      padding: 16px;
+    }
+
+    /* Left Hero Section */
+    #${AUTH_ID} .auth-hero-section {
+      flex: 1;
+      max-width: 540px;
+      color: #ffffff;
+      user-select: none;
+    }
+    #${AUTH_ID} .auth-hero-title {
+      display: flex;
+      flex-direction: column;
+      font-weight: 900;
+      font-size: clamp(48px, 6.5vw, 84px);
+      line-height: 0.92;
+      letter-spacing: -0.035em;
+      color: #ffffff;
+      text-transform: uppercase;
+      text-shadow: 0 4px 20px rgba(0, 0, 0, 0.55);
+    }
+    #${AUTH_ID} .auth-hero-tagline {
+      margin: 22px 0 0 0;
+      font-size: clamp(17px, 2.2vw, 24px);
+      line-height: 1.35;
+      font-weight: 500;
+      color: rgba(255, 255, 255, 0.94);
+      max-width: 380px;
+      text-shadow: 0 2px 10px rgba(0, 0, 0, 0.65);
+    }
+
+    /* Right Glassmorphic Card Container */
+    #${AUTH_ID} .auth-card-section {
+      flex: 1;
+      max-width: 440px;
+      width: 100%;
+      display: flex;
+      justify-content: flex-end;
+      perspective: 1000px;
+    }
+
+    /* Frosted Glass Card */
+    #${AUTH_ID} .auth-glass-card {
+      box-sizing: border-box;
+      width: 100%;
+      padding: 36px 32px 30px;
+      border-radius: 26px;
+      background: rgba(255, 255, 255, 0.16);
+      backdrop-filter: blur(28px) saturate(140%);
+      -webkit-backdrop-filter: blur(28px) saturate(140%);
+      border: 1.5px solid rgba(255, 255, 255, 0.42);
+      box-shadow: 0 30px 60px -12px rgba(0, 0, 0, 0.45), 0 0 0 1px rgba(255, 255, 255, 0.18) inset;
+      transition: transform 0.2s ease, box-shadow 0.2s ease;
+    }
+
+    /* Card Header */
+    #${AUTH_ID} .auth-card-brand {
+      margin: 0 0 20px;
+      font-size: 26px;
+      font-weight: 800;
+      letter-spacing: -0.015em;
+      text-align: center;
+      color: #0b1329;
+      text-transform: uppercase;
+      text-shadow: 0 1px 2px rgba(255, 255, 255, 0.35);
+    }
+    #${AUTH_ID} .auth-card-subhead {
+      margin: -14px 0 18px;
+      font-size: 13.5px;
+      font-weight: 600;
+      text-align: center;
+      color: #1e293b;
+    }
+
+    /* Form Fields & Labels */
+    #${AUTH_ID} .auth-form {
+      display: grid;
+      gap: 13px;
+    }
+    #${AUTH_ID} .auth-form label {
+      display: grid;
+      gap: 6px;
+      font-size: 13.5px;
+      font-weight: 700;
+      color: #ffffff;
+      text-shadow: 0 1px 3px rgba(0, 0, 0, 0.7);
+    }
+    #${AUTH_ID} .auth-form label span {
+      display: block;
+      color: #ffffff;
+      font-weight: 700;
+      letter-spacing: 0.01em;
+    }
+    #${AUTH_ID} .auth-form input {
+      box-sizing: border-box;
+      width: 100%;
+      min-height: 44px;
+      padding: 10px 14px;
+      border-radius: 12px;
+      border: 1.5px solid rgba(255, 255, 255, 0.55);
+      background: rgba(255, 255, 255, 0.18);
+      color: #ffffff;
+      font: 500 14.5px system-ui, -apple-system, sans-serif;
+      backdrop-filter: blur(8px);
+      -webkit-backdrop-filter: blur(8px);
+      transition: border-color 0.18s ease, background 0.18s ease, box-shadow 0.18s ease;
+      box-shadow: 0 2px 6px rgba(0, 0, 0, 0.15) inset;
+    }
+    #${AUTH_ID} .auth-form input::placeholder {
+      color: rgba(255, 255, 255, 0.75);
+      font-weight: 400;
+    }
+    #${AUTH_ID} .auth-form input:focus {
+      outline: none;
+      border-color: #3b82f6;
+      background: rgba(255, 255, 255, 0.28);
+      box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.4), 0 2px 6px rgba(0, 0, 0, 0.1) inset;
+    }
+
+    /* Password Input Wrapper & Toggle */
+    #${AUTH_ID} .auth-password-wrapper {
+      position: relative;
+      display: flex;
+      align-items: center;
+      width: 100%;
+    }
+    #${AUTH_ID} .auth-password-wrapper input {
+      padding-right: 44px;
+    }
+    #${AUTH_ID} .auth-toggle-password {
+      position: absolute;
+      right: 8px;
+      top: 50%;
+      transform: translateY(-50%);
+      background: none;
+      border: none;
+      padding: 6px;
+      cursor: pointer;
+      color: rgba(255, 255, 255, 0.85);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      border-radius: 8px;
+      transition: color 0.15s ease, background-color 0.15s ease;
+    }
+    #${AUTH_ID} .auth-toggle-password:hover {
+      color: #ffffff;
+      background: rgba(255, 255, 255, 0.2);
+    }
+    #${AUTH_ID} .auth-toggle-password:focus-visible {
+      outline: 2px solid #3b82f6;
+      outline-offset: 1px;
+    }
+
+    /* Forgot Password Link */
+    #${AUTH_ID} .auth-forgot-link {
+      font-size: 12.5px;
+      color: rgba(255, 255, 255, 0.92);
+      text-decoration: none;
+      font-weight: 600;
+      text-shadow: 0 1px 3px rgba(0, 0, 0, 0.5);
+      transition: color 0.15s ease;
+    }
+    #${AUTH_ID} .auth-forgot-link:hover {
+      color: #ffffff;
+      text-decoration: underline;
+    }
+
+    /* Primary Submit Button (Electric Blue) */
+    #${AUTH_ID} .auth-submit-btn,
+    #${AUTH_ID} .auth-submit {
+      box-sizing: border-box;
+      width: 100%;
+      min-height: 46px;
+      margin-top: 4px;
+      border: none;
+      border-radius: 12px;
+      background: #0047ff;
+      color: #ffffff;
+      font: 700 14px system-ui, -apple-system, sans-serif;
+      letter-spacing: 0.05em;
+      text-transform: uppercase;
+      cursor: pointer;
+      box-shadow: 0 8px 22px rgba(0, 71, 255, 0.45);
+      transition: background-color 0.15s ease, transform 0.12s ease, box-shadow 0.15s ease;
+    }
+    #${AUTH_ID} .auth-submit-btn:hover,
+    #${AUTH_ID} .auth-submit:hover {
+      background: #003cd4;
+      box-shadow: 0 10px 26px rgba(0, 71, 255, 0.6);
+      transform: translateY(-1px);
+    }
+    #${AUTH_ID} .auth-submit-btn:active,
+    #${AUTH_ID} .auth-submit:active {
+      transform: translateY(0);
+    }
+    #${AUTH_ID} .auth-submit-btn:disabled,
+    #${AUTH_ID} .auth-submit:disabled {
+      cursor: wait;
+      opacity: 0.72;
+      transform: none;
+    }
+
+    /* Hints & Errors */
+    #${AUTH_ID} .auth-hint {
+      margin: -4px 0 0;
+      color: rgba(255, 255, 255, 0.85);
+      font-size: 12px;
+      text-shadow: 0 1px 2px rgba(0, 0, 0, 0.5);
+    }
+    #${AUTH_ID} .auth-error {
+      min-height: 20px;
+      margin: 0;
+      color: #fca5a5;
+      font-size: 13px;
+      font-weight: 600;
+      text-shadow: 0 1px 3px rgba(0, 0, 0, 0.7);
+    }
+
+    /* Switch Nav Link */
+    #${AUTH_ID} .auth-switch-text,
+    #${AUTH_ID} .auth-switch {
+      margin: 18px 0 0;
+      text-align: center;
+      font-size: 13.5px;
+      color: rgba(255, 255, 255, 0.94);
+      text-shadow: 0 1px 3px rgba(0, 0, 0, 0.6);
+    }
+    #${AUTH_ID} .auth-switch-text a,
+    #${AUTH_ID} .auth-switch a {
+      color: #ffffff;
+      font-weight: 700;
+      text-decoration: underline;
+      margin-left: 4px;
+      cursor: pointer;
+    }
+
+    /* Smooth Diagonal Slide Keyframes & Classes */
+    @keyframes authSlideDiagonalIn {
+      0% {
+        opacity: 0;
+        transform: translate(32px, -32px) scale(0.96);
+      }
+      100% {
+        opacity: 1;
+        transform: translate(0, 0) scale(1);
+      }
+    }
+    @keyframes authSlideDiagonalOut {
+      0% {
+        opacity: 1;
+        transform: translate(0, 0) scale(1);
+      }
+      100% {
+        opacity: 0;
+        transform: translate(-32px, 32px) scale(0.96);
+      }
+    }
+    #${AUTH_ID} .auth-slide-diagonal-in {
+      animation: authSlideDiagonalIn 0.32s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+    }
+    #${AUTH_ID} .auth-slide-diagonal-out {
+      animation: authSlideDiagonalOut 0.22s cubic-bezier(0.7, 0, 0.84, 0) forwards;
+    }
+
+    /* Responsive Mobile Breakpoint */
+    @media (max-width: 880px) {
+      #${AUTH_ID} {
+        padding: 20px 12px;
+        align-items: flex-start;
+      }
+      #${AUTH_ID} .auth-layout-container {
+        flex-direction: column;
+        justify-content: center;
+        align-items: center;
+        gap: 20px;
+        min-height: auto;
+        padding: 12px 4px 28px;
+      }
+      #${AUTH_ID} .auth-hero-section {
+        max-width: 100%;
+        text-align: center;
+        margin-top: 8px;
+      }
+      #${AUTH_ID} .auth-hero-title {
+        font-size: clamp(34px, 8.5vw, 48px);
+        line-height: 1.05;
+      }
+      #${AUTH_ID} .auth-hero-tagline {
+        margin: 10px auto 0;
+        font-size: 15px;
+        max-width: 100%;
+      }
+      #${AUTH_ID} .auth-card-section {
+        justify-content: center;
+        max-width: 420px;
+      }
+      #${AUTH_ID} .auth-glass-card {
+        padding: 26px 20px 22px;
+        border-radius: 20px;
+      }
+      #${AUTH_ID} .auth-card-brand {
+        font-size: 23px;
+        margin-bottom: 16px;
+      }
+    }
   `;
   document.head.append(style);
 }
@@ -112,17 +417,32 @@ async function onRegister(userData) {
   const authRoot = document.getElementById(AUTH_ID);
   if (authRoot) {
     authRoot.innerHTML = `
-      <main class="auth-card" style="text-align: center;">
-        <div class="auth-brand">CNG Deal Desk</div>
-        <div style="margin: 20px 0; display: inline-flex; padding: 16px; background: #ecfdf5; border-radius: 50%; color: #047857;">
-          <svg style="width: 36px; height: 36px;" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"/></svg>
-        </div>
-        <h1 id="auth-title">Verify your email</h1>
-        <p class="auth-subtitle" style="margin-top: 8px;">Account created successfully! We've sent a verification link to <strong>${userData.email}</strong>.<br><br>Please check your Gmail or email inbox and click the confirmation link to activate your account before accessing the Deal Desk dashboard.</p>
-        <div style="margin-top: 24px; display: grid; gap: 10px;">
-          <a href="/login" class="auth-submit" style="display: flex; align-items: center; justify-content: center; text-decoration: none;">Proceed to Sign in</a>
-        </div>
-      </main>
+      <div class="auth-layout-container">
+        <!-- Left Hero Branding -->
+        <section class="auth-hero-section">
+          <div class="auth-hero-title">
+            <span>CNG</span>
+            <span>GLOBAL</span>
+          </div>
+          <p class="auth-hero-tagline">Buy, sell commodity at affordable price.</p>
+        </section>
+
+        <!-- Right Glassmorphic Verification Card -->
+        <section class="auth-card-section auth-slide-diagonal-in">
+          <main class="auth-glass-card auth-card" style="text-align: center;" aria-labelledby="auth-title">
+            <h1 class="auth-card-brand">CNG GLOBAL</h1>
+            <div style="margin: 14px auto 16px; display: inline-flex; padding: 14px; background: rgba(59, 130, 246, 0.25); border: 1.5px solid rgba(255, 255, 255, 0.4); border-radius: 50%; color: #ffffff;">
+              <svg style="width: 36px; height: 36px;" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"/></svg>
+            </div>
+            <h2 id="auth-title" style="font-size: 22px; font-weight: 700; color: #0b1329; margin: 0 0 10px; text-shadow: 0 1px 2px rgba(255,255,255,0.3);">Verify your email</h2>
+            <p style="color: #ffffff; font-size: 13.5px; line-height: 1.55; text-shadow: 0 1px 3px rgba(0, 0, 0, 0.7); margin: 0 0 22px;">
+              Account created successfully! We've sent a verification link to <strong style="color: #93c5fd;">${userData.email}</strong>.<br><br>
+              Please check your Gmail or email inbox and click the confirmation link to activate your account before accessing the Deal Desk dashboard.
+            </p>
+            <a href="/login" class="auth-submit-btn auth-submit" style="display: flex; align-items: center; justify-content: center; text-decoration: none;">PROCEED TO SIGN IN</a>
+          </main>
+        </section>
+      </div>
     `;
     authRoot.querySelector("a").addEventListener("click", (e) => {
       e.preventDefault();
