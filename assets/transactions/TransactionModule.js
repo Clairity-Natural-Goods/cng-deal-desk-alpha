@@ -551,20 +551,20 @@ export default function TransactionModule() {
     }
     if (syncStatus === "sync_failed") {
       return jsxs("span", {
-        className: "inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] bg-rose-50 text-rose-800 dark:bg-rose-950/60 dark:text-rose-300 font-medium border border-rose-200 dark:border-rose-800 cursor-pointer",
+        className: "inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] bg-rose-50 text-rose-800 dark:bg-rose-950/80 dark:text-rose-300 font-bold border border-rose-300 dark:border-rose-700 cursor-pointer shrink-0 max-w-full whitespace-nowrap",
         title: errorMsg || "Sync failed. Click to retry.",
         onClick: handleManualSync,
         children: [
-          jsx("span", { className: "w-1.5 h-1.5 rounded-full bg-rose-600 dark:bg-rose-400 animate-pulse" }),
+          jsx("span", { className: "w-1.5 h-1.5 rounded-full bg-rose-600 dark:bg-rose-400 animate-pulse shrink-0" }),
           "Sync Failed",
         ],
       });
     }
     return jsxs("span", {
-      className: "inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] bg-amber-50 text-amber-800 dark:bg-amber-950/60 dark:text-amber-300 font-medium border border-amber-200 dark:border-amber-800",
+      className: "inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] bg-amber-100 text-amber-900 border-amber-300 dark:bg-amber-950/80 dark:text-amber-300 dark:border-amber-600 font-bold border shrink-0 max-w-full whitespace-nowrap shadow-xs",
       title: "Pending synchronization to Supabase",
       children: [
-        jsx("span", { className: "w-1.5 h-1.5 rounded-full bg-amber-500 animate-pulse" }),
+        jsx("span", { className: "w-1.5 h-1.5 rounded-full bg-amber-500 dark:bg-amber-400 animate-pulse shrink-0" }),
         "Pending Sync",
       ],
     });
@@ -606,12 +606,12 @@ export default function TransactionModule() {
 
           // Connectivity & Sync Control Box
           jsxs("div", {
-            className: "flex flex-wrap items-center gap-3",
+            className: "flex flex-wrap items-center gap-2.5 max-w-full",
             children: [
               // Online / Offline Indicator
               jsxs("div", {
                 className: cn(
-                  "flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-semibold border",
+                  "flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-semibold border shrink-0",
                   syncState.isOnline
                     ? "bg-emerald-50 text-emerald-800 border-emerald-300 dark:bg-emerald-950/40 dark:text-emerald-300"
                     : "bg-amber-50 text-amber-800 border-amber-300 dark:bg-amber-950/40 dark:text-amber-300"
@@ -624,17 +624,17 @@ export default function TransactionModule() {
                 ],
               }),
 
-              // Pending Sync Counter Pill
+              // Pending Sync Counter Pill (Fully responsive & contained)
               jsxs("div", {
-                className: "flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-medium border bg-slate-100 border-slate-300 text-slate-700 dark:bg-slate-800 dark:border-slate-700 dark:text-slate-300",
+                className: "flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-medium border bg-slate-100 border-slate-300 text-slate-700 dark:bg-slate-800 dark:border-slate-700 dark:text-slate-300 shrink-0 max-w-full",
                 children: [
                   stats.pending_sync > 0
                     ? jsxs("span", {
-                        className: "text-amber-600 font-bold",
+                        className: "text-amber-600 dark:text-amber-300 font-bold whitespace-nowrap",
                         children: [stats.pending_sync, " pending sync"],
                       })
                     : jsx("span", {
-                        className: "text-emerald-600 font-medium",
+                        className: "text-emerald-600 dark:text-emerald-400 font-medium whitespace-nowrap",
                         children: "Queue empty",
                       }),
                 ],
@@ -645,7 +645,7 @@ export default function TransactionModule() {
                 type: "button",
                 onClick: handleManualSync,
                 disabled: syncState.isSyncing,
-                className: "inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-lg bg-slate-900 text-white hover:bg-slate-800 disabled:opacity-50 dark:bg-slate-100 dark:text-slate-900",
+                className: "inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-lg bg-slate-900 text-white hover:bg-slate-800 disabled:opacity-50 dark:bg-slate-100 dark:text-slate-900 shrink-0",
                 children: syncState.isSyncing ? "Syncing..." : "Sync Cloud Now",
               }),
             ],
@@ -672,8 +672,8 @@ export default function TransactionModule() {
                   jsxs("div", {
                     className: "p-4 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 shadow-sm",
                     children: [
-                      jsx("div", { className: "text-xs font-semibold text-amber-600 uppercase", children: "Pending Sync" }),
-                      jsx("div", { className: "text-2xl font-bold text-amber-600 mt-1", children: stats.pending_sync }),
+                      jsx("div", { className: "text-xs font-bold text-amber-600 dark:text-amber-400 uppercase tracking-wide", children: "Pending Sync" }),
+                      jsx("div", { className: "text-2xl font-black text-amber-600 dark:text-amber-300 mt-1", children: stats.pending_sync }),
                     ],
                   }),
                   jsxs("div", {
@@ -696,7 +696,7 @@ export default function TransactionModule() {
                       jsx("button", {
                         type: "button",
                         onClick: handleCreateNew,
-                        className: "w-full h-full min-h-[56px] rounded-xl bg-emerald-700 hover:bg-emerald-800 text-white font-bold text-sm shadow-md transition-all flex items-center justify-center gap-2",
+                        className: "w-full h-full min-h-[56px] rounded-xl bg-emerald-700 hover:bg-emerald-800 !text-white font-bold text-sm shadow-md transition-all flex items-center justify-center gap-2 border border-emerald-800",
                         children: "+ New Transaction Record",
                       }),
                     ],
@@ -774,14 +774,15 @@ export default function TransactionModule() {
                             jsxs("div", {
                               className: "space-y-3",
                               children: [
-                                // Top row: Reference & Badges
+                                // Top row: Reference & Badges (Contained on mobile)
                                 jsxs("div", {
-                                  className: "flex items-start justify-between gap-2",
+                                  className: "flex items-start justify-between gap-2 flex-wrap sm:flex-nowrap min-w-0 max-w-full",
                                   children: [
                                     jsxs("div", {
+                                      className: "min-w-0 max-w-full",
                                       children: [
                                         jsx("span", {
-                                          className: "font-mono font-bold text-sm tracking-tight text-slate-900 dark:text-slate-100",
+                                          className: "font-mono font-bold text-sm tracking-tight text-slate-900 dark:text-slate-100 block truncate",
                                           children: tx.reference,
                                         }),
                                         jsx("div", {
@@ -791,7 +792,7 @@ export default function TransactionModule() {
                                       ],
                                     }),
                                     jsxs("div", {
-                                      className: "flex flex-col items-end gap-1",
+                                      className: "flex flex-wrap sm:flex-col items-end gap-1 shrink-0 max-w-full",
                                       children: [
                                         renderStatusBadge(tx.status),
                                         renderSyncBadge(tx.sync_status, tx.sync_error),
@@ -892,31 +893,39 @@ export default function TransactionModule() {
           jsxs("main", {
             className: "space-y-6",
             children: [
-              // Top Back button and Header
+              // Top Back button and Header (Mobile contained)
               jsxs("div", {
-                className: "flex flex-col md:flex-row md:items-center justify-between gap-4 p-4 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-sm",
+                className: "flex flex-col md:flex-row md:items-center justify-between gap-4 p-4 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-sm max-w-full overflow-hidden",
                 children: [
                   jsxs("div", {
-                    className: "flex items-center gap-3",
+                    className: "flex flex-col sm:flex-row sm:items-center gap-3 min-w-0 max-w-full",
                     children: [
                       jsx("button", {
                         type: "button",
                         onClick: () => setSelectedTx(null),
-                        className: "px-3 py-1.5 rounded-lg text-xs font-semibold bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700",
+                        className: "px-3 py-1.5 rounded-lg text-xs font-semibold bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 shrink-0 self-start sm:self-auto",
                         children: "← Back to Transactions",
                       }),
                       jsxs("div", {
+                        className: "min-w-0 max-w-full space-y-0.5",
                         children: [
                           jsxs("div", {
-                            className: "flex items-center gap-2",
+                            className: "flex flex-wrap items-center gap-2 max-w-full",
                             children: [
-                              jsx("span", { className: "font-mono font-bold text-lg", children: selectedTx.reference }),
+                              jsx("span", {
+                                className: "font-bold text-base md:text-lg text-slate-900 dark:text-slate-100 whitespace-nowrap",
+                                children: "New Transaction Record",
+                              }),
+                              jsx("span", {
+                                className: "font-mono font-bold text-xs px-2 py-0.5 rounded bg-slate-100 dark:bg-slate-800 text-slate-800 dark:text-slate-200 border border-slate-300 dark:border-slate-700 shrink-0",
+                                children: selectedTx.reference,
+                              }),
                               renderStatusBadge(selectedTx.status),
                               renderSyncBadge(selectedTx.sync_status, selectedTx.sync_error),
                             ],
                           }),
                           jsxs("div", {
-                            className: "text-xs text-slate-500",
+                            className: "text-xs text-slate-500 truncate max-w-full",
                             children: [
                               "Officer: ",
                               selectedTx.created_by_name,
@@ -977,7 +986,10 @@ export default function TransactionModule() {
                           : "border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-800"
                       ),
                       children: [
-                        jsx("span", { className: "text-[10px] uppercase tracking-wider text-slate-500 dark:text-slate-400 font-semibold", children: `Element ${sec.num}` }),
+                        jsx("span", {
+                          className: "text-[10px] uppercase tracking-wider text-slate-500 dark:text-slate-400 font-semibold",
+                          children: sec.num === 7 ? "Submit" : `Element ${sec.num}`,
+                        }),
                         jsx("span", { className: "font-bold truncate mt-0.5", children: sec.title }),
                       ],
                     },
@@ -1794,7 +1806,7 @@ export default function TransactionModule() {
                           jsxs("div", {
                             className: "border-b border-slate-100 dark:border-slate-800 pb-3",
                             children: [
-                              jsx("h3", { className: "text-base font-bold text-slate-900 dark:text-slate-100", children: "Element 07 — Clarence Approval Status" }),
+                              jsx("h3", { className: "text-base font-bold text-slate-900 dark:text-slate-100", children: "Submit — Clarence Approval Status" }),
                               jsx("p", { className: "text-xs text-slate-600 dark:text-slate-300 mt-0.5", children: "Only Clarence or an authorized delegated approver may approve transactions. Field officers cannot self-approve." }),
                             ],
                           }),
@@ -1905,18 +1917,18 @@ export default function TransactionModule() {
                     onClick: () => setActiveSection((prev) => Math.max(1, prev - 1)),
                     disabled: activeSection === 1,
                     className: "px-3 py-1.5 text-xs font-semibold rounded-lg bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 disabled:opacity-40",
-                    children: "← Previous Element",
+                    children: activeSection === 7 ? "← Previous: Element 6" : "← Previous Element",
                   }),
                   jsxs("div", {
                     className: "text-xs font-semibold text-slate-500",
-                    children: ["Deal Pack Element ", activeSection, " of 7"],
+                    children: [activeSection === 7 ? "Deal Pack: Submit (7 of 7)" : `Deal Pack Element ${activeSection} of 7`],
                   }),
                   jsx("button", {
                     type: "button",
                     onClick: () => setActiveSection((prev) => Math.min(7, prev + 1)),
                     disabled: activeSection === 7,
                     className: "px-3 py-1.5 text-xs font-semibold rounded-lg bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 disabled:opacity-40",
-                    children: "Next Element →",
+                    children: activeSection === 6 ? "Next: Submit →" : "Next Element →",
                   }),
                 ],
               }),

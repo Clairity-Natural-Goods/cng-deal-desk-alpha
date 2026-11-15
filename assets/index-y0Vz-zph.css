@@ -160,11 +160,17 @@ html.dark .text-slate-400,
 }
 
 /* ==========================================================================
-   HIGH-CONTRAST TYPOGRAPHY & FIGURES (LIGHT MODE)
+   HIGH-CONTRAST TYPOGRAPHY & FIGURES (LIGHT MODE - WHITESMOKE)
    ========================================================================== */
+html:not(.dark),
 html:not(.dark) body,
-html[data-theme="light"] body {
-  background-color: #f8fafc !important;
+html[data-theme="light"],
+html[data-theme="light"] body,
+html:not(.dark) #root,
+html[data-theme="light"] #root,
+html:not(.dark) .bg-background,
+html[data-theme="light"] .bg-background {
+  background-color: whitesmoke !important;
   color: #0f172a !important;
 }
 
@@ -190,6 +196,24 @@ html[data-theme="light"] .text-slate-700 {
 html:not(.dark) .text-slate-900,
 html[data-theme="light"] .text-slate-900 {
   color: #020617 !important;
+}
+
+/* High visibility for action buttons & matrix/transaction controls */
+html:not(.dark) .bg-emerald-700,
+html[data-theme="light"] .bg-emerald-700,
+html:not(.dark) button.bg-emerald-700,
+html[data-theme="light"] button.bg-emerald-700 {
+  color: #ffffff !important;
+}
+
+/* Strict mobile containment for badges & controls */
+@media (max-width: 640px) {
+  .sync-badge,
+  [data-sync-badge] {
+    max-width: 100% !important;
+    white-space: normal !important;
+    word-break: break-word !important;
+  }
 }
 
 /* ==========================================================================
