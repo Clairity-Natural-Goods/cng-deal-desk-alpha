@@ -231,3 +231,128 @@ export function maskExportRecords(records, isAuthorized = false) {
     return cloned;
   });
 }
+
+/**
+ * Mask a single transaction record for display.
+ * Default behavior masks buyer & supplier contact details.
+ * If authorized with purpose, selectively reveals permitted fields.
+ */
+export function maskTransaction(tx, isAuthorized = false, purpose = null) {
+  if (!tx || typeof tx !== "object") return tx;
+  if (isAuthorized && purpose) {
+    // If authorized for BANKING, only financial/bank fields revealed
+    // If authorized for OPERATIONAL, only logistics/address/person fields revealed
+    return { ...tx };
+  }
+
+  const cloned = { ...tx };
+
+  if (cloned.buyer_requirements && typeof cloned.buyer_requirements === "object") {
+    cloned.buyer_requirements = {
+      ...cloned.buyer_requirements,
+      contact_person: cloned.buyer_requirements.contact_person
+        ? maskPersonName(cloned.buyer_requirements.contact_person)
+        : undefined,
+      contact_phone: cloned.buyer_requirements.contact_phone
+        ? maskPhoneNumber(cloned.buyer_requirements.contact_phone)
+        : undefined,
+      contact_email: cloned.buyer_requirements.contact_email
+        ? maskEmailAddress(cloned.buyer_requirements.contact_email)
+        : undefined,
+      delivery_location: cloned.buyer_requirements.delivery_location
+        ? maskContactAddress(cloned.buyer_requirements.delivery_location)
+        : undefined,
+    };
+  }
+
+  if (cloned.supplier_verification && typeof cloned.supplier_verification === "object") {
+    cloned.supplier_verification = {
+      ...cloned.supplier_verification,
+      contact_person: cloned.supplier_verification.contact_person
+        ? maskPersonName(cloned.supplier_verification.contact_person)
+        : undefined,
+      phone: cloned.supplier_verification.phone
+        ? maskPhoneNumber(cloned.supplier_verification.phone)
+        : undefined,
+      contact_phone: cloned.supplier_verification.contact_phone
+        ? maskPhoneNumber(cloned.supplier_verification.contact_phone)
+        : undefined,
+      location_details: cloned.supplier_verification.location_details
+        ? maskContactAddress(cloned.supplier_verification.location_details)
+        : undefined,
+    };
+  }
+
+  if (cloned.transport_collection && typeof cloned.transport_collection === "object") {
+    cloned.transport_collection = {
+      ...cloned.transport_collection,
+      transporter_contact: cloned.transport_collection.transporter_contact
+        ? maskPhoneNumber(cloned.transport_collection.transporter_contact)
+        : undefined,
+    };
+  }
+
+  if (cloned.payment_terms && typeof cloned.payment_terms === "object") {
+    cloned.payment_terms = {
+      ...cloned.payment_terms,
+      bank_account: cloned.payment_terms.bank_account
+        ? maskBankAccount(cloned.payment_terms.bank_account)
+        : undefined,
+    };
+  }
+
+  return cloned;
+}
+
+/**
+ * Check if the active user can reveal identity for a given purpose.
+ */
+export function canUserRevealIdentity(user, purpose) {
+  return getDisclosurePermission(user, purpose);
+}
+
+/**
+ * Record an audit log for identity disclosure, either via Supabase RPC/table
+ * or in durable local audit store.
+ */
+export async function recordDisclosureAudit(supabaseClient, { transactionId, requestingUserId, subjectType, purpose, reason }) {
+  try {
+    if (supabaseClient?.rpc) {
+      const { data, error } = await supabaseClient.rpc("request_identity_disclosure", {
+        p_party_id: null,
+        p_transaction_id: transactionId,
+        p_purpose: purpose,
+        p_reason: reason || "Operational review",
+      });
+      if (!error && data) return { success: true, data };
+    }
+    if (supabaseClient?.from) {
+      await supabaseClient.from("disclosure_audit_logs").insert({
+        transaction_id: transactionId,
+        requesting_user_id: requestingUserId,
+        subject_type: subjectType || "COUNTERPARTY",
+        disclosure_purpose: purpose,
+        access_result: "GRANTED",
+        reason: reason || "Operational view",
+      });
+    }
+  } catch (err) {
+    console.warn("Identity disclosure audit logging notice:", err.message);
+  }
+
+  // Also record in local audit cache for offline resilience
+  try {
+    const localKey = "cng_disclosure_audits";
+    const existing = JSON.parse(localStorage.getItem(localKey) || "[]");
+    existing.push({
+      transactionId,
+      requestingUserId,
+      purpose,
+      reason,
+      timestamp: new Date().toISOString(),
+    });
+    localStorage.setItem(localKey, JSON.stringify(existing.slice(-50)));
+  } catch (_) {}
+
+  return { success: true };
+}

@@ -262,7 +262,7 @@ html.dark textarea::placeholder,
   }
 }
 
-/* Smaller screens (< 768px): Compact icons and fitted labels */
+/* Smaller screens (< 768px): Compact icons and fitted labels with auto scroll-hiding */
 @media (max-width: 767px) {
   .bottom-tab-bar,
   nav.bottom-tab-bar {
@@ -274,6 +274,14 @@ html.dark textarea::placeholder,
     padding-left: max(env(safe-area-inset-left, 0px), 4px) !important;
     padding-right: max(env(safe-area-inset-right, 0px), 4px) !important;
     padding-bottom: max(env(safe-area-inset-bottom, 0px), 2px) !important;
+    transition: transform 0.28s cubic-bezier(0.16, 1, 0.3, 1) !important;
+    will-change: transform;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .bottom-tab-bar,
+    nav.bottom-tab-bar {
+      transition: none !important;
+    }
   }
   html:not(.dark) .bottom-tab-bar,
   html:not(.dark) nav.bottom-tab-bar {
@@ -302,4 +310,15 @@ html.dark textarea::placeholder,
     overflow: hidden !important;
     text-overflow: ellipsis !important;
   }
+}
+
+/* Dynamic Viewport Unit & Modal Scroll Trapping Fixes */
+html, body, #root {
+  min-height: 100dvh;
+}
+
+.modal-content,
+[role="dialog"] {
+  max-height: 90dvh;
+  overflow-y: auto;
 }

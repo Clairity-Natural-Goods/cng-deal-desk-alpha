@@ -25,7 +25,34 @@ Please change the parent <Route path="${e}"> to <Route path="${e===`/`?`*`:`${e}
   let { theme: currentTheme, setTheme: setTheme } = te();
   let [profileOpen, setProfileOpen] = v.useState(false);
   let [mobileSidebarOpen, setMobileSidebarOpen] = v.useState(false);
+  let [logoutConfirmOpen, setLogoutConfirmOpen] = v.useState(false);
+  let [isBottomNavVisible, setIsBottomNavVisible] = v.useState(true);
   let [isOnline, setIsOnline] = v.useState(typeof navigator !== 'undefined' ? navigator.onLine : true);
+
+  // Throttled scroll direction listener for mobile bottom tab bar (hide on scroll down, show on scroll up)
+  v.useEffect(() => {
+    let lastScrollY = window.scrollY;
+    let ticking = false;
+    let handleScroll = () => {
+      if (!ticking) {
+        window.requestAnimationFrame(() => {
+          let currentY = window.scrollY;
+          if (currentY <= 15) {
+            setIsBottomNavVisible(true);
+          } else if (currentY > lastScrollY + 6) {
+            setIsBottomNavVisible(false);
+          } else if (currentY < lastScrollY - 6) {
+            setIsBottomNavVisible(true);
+          }
+          lastScrollY = Math.max(0, currentY);
+          ticking = false;
+        });
+        ticking = true;
+      }
+    };
+    window.addEventListener('scroll', handleScroll, { passive: true });
+    return () => window.removeEventListener('scroll', handleScroll);
+  }, []);
 
   v.useEffect(() => {
     let handleOnline = () => setIsOnline(true);
@@ -64,6 +91,7 @@ Please change the parent <Route path="${e}"> to <Route path="${e===`/`?`*`:`${e}
   v.useEffect(() => {
     setProfileOpen(false);
     setMobileSidebarOpen(false);
+    setIsBottomNavVisible(true);
   }, [e.pathname]);
 
   let pageMeta = {
@@ -214,6 +242,21 @@ Please change the parent <Route path="${e}"> to <Route path="${e===`/`?`*`:`${e}
             }),
             (0, D.jsx)('p', { className: 'text-[10px] text-muted-foreground leading-tight', children: 'PostgreSQL & Supabase Verified' }),
           ],
+        }),
+        (0, D.jsx)('div', {
+          className: 'px-3 pb-3 mt-1',
+          children: (0, D.jsxs)('button', {
+            type: 'button',
+            onClick: () => {
+              setMobileSidebarOpen(false);
+              setLogoutConfirmOpen(true);
+            },
+            className: 'w-full text-left px-3 py-2.5 rounded-xl text-rose-600 dark:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-950/40 font-bold text-xs flex items-center justify-between border border-rose-200 dark:border-rose-900/50 transition-colors shadow-xs',
+            children: [
+              (0, D.jsxs)('span', { className: 'flex items-center gap-2', children: [(0, D.jsx)('span', { children: '➔' }), 'Sign Out / Logout'] }),
+              (0, D.jsx)('span', { className: 'text-[10px] text-rose-500 uppercase tracking-wider', children: 'End Session' }),
+            ],
+          }),
         }),
       ],
     })
@@ -369,19 +412,13 @@ Please change the parent <Route path="${e}"> to <Route path="${e===`/`?`*`:`${e}
                               (0, D.jsx)('div', { className: 'border-t border-border' }),
                               (0, D.jsxs)('button', {
                                 type: 'button',
-                                onClick: async () => {
+                                onClick: () => {
                                   setProfileOpen(false);
-                                  if (authLogout) {
-                                    await authLogout();
-                                  } else {
-                                    let db = globalThis.__B44_DB__;
-                                    if (db?.auth?.logout) await db.auth.logout();
-                                    window.location.replace('/login');
-                                  }
+                                  setLogoutConfirmOpen(true);
                                 },
                                 className: 'w-full text-left px-2.5 py-2 rounded-lg text-rose-600 dark:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-950/40 font-bold flex items-center justify-between transition-colors',
                                 children: [
-                                  (0, D.jsx)('span', { children: 'Sign Out' }),
+                                  (0, D.jsx)('span', { children: 'Sign Out / Logout' }),
                                   (0, D.jsx)('span', { children: '➔' }),
                                 ],
                               }),
@@ -416,8 +453,8 @@ Please change the parent <Route path="${e}"> to <Route path="${e===`/`?`*`:`${e}
             }),
           }),
           !r && (0, D.jsx)('nav', {
-            className: 'bottom-tab-bar no-print fixed bottom-0 left-0 right-0 z-40 border-t border-border/80 bg-background/95 backdrop-blur md:hidden',
-            style: { position: 'fixed' },
+            className: c('bottom-tab-bar no-print fixed bottom-0 left-0 right-0 z-40 border-t border-border/80 bg-background/95 backdrop-blur md:hidden transition-transform duration-300 ease-in-out', !isBottomNavVisible && 'translate-y-full'),
+            style: { position: 'fixed', transform: isBottomNavVisible ? 'translateY(0)' : 'translateY(100%)' },
             children: (0, D.jsx)('div', {
               className: 'flex items-center justify-around px-1 py-1',
               children: b_.map((item) => (
@@ -442,6 +479,71 @@ Please change the parent <Route path="${e}"> to <Route path="${e===`/`?`*`:`${e}
               className: 'w-full px-4 py-6 text-xs leading-relaxed text-muted-foreground sm:px-6 lg:px-8',
               children: 'CNG Deal Desk Alpha • Commodity Transaction Underwriting & Verified Registry. Not connected to any bank, mobile money or escrow. Figures reflect audited transaction documentation.',
             }),
+          }),
+        ],
+      }),
+      logoutConfirmOpen && (0, D.jsxs)('div', {
+        className: 'fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm animate-in fade-in',
+        children: [
+          (0, D.jsx)('div', {
+            className: 'fixed inset-0',
+            onClick: () => setLogoutConfirmOpen(false),
+          }),
+          (0, D.jsxs)('div', {
+            className: 'relative max-w-md w-full bg-card rounded-2xl border border-border p-6 shadow-2xl space-y-4 z-10 text-card-foreground',
+            children: [
+              (0, D.jsxs)('div', {
+                className: 'flex items-center gap-3',
+                children: [
+                  (0, D.jsx)('div', {
+                    className: 'flex h-10 w-10 items-center justify-center rounded-full bg-rose-100 dark:bg-rose-950 text-rose-600 dark:text-rose-400 text-lg font-bold shrink-0',
+                    children: '⚠️',
+                  }),
+                  (0, D.jsxs)('div', {
+                    children: [
+                      (0, D.jsx)('h3', { className: 'text-base font-bold text-foreground', children: 'Confirm Sign Out' }),
+                      (0, D.jsx)('p', { className: 'text-xs text-muted-foreground', children: 'End your active Deal Desk session' }),
+                    ],
+                  }),
+                ],
+              }),
+              (0, D.jsx)('p', {
+                className: 'text-xs text-muted-foreground leading-relaxed',
+                children: 'Are you sure you want to sign out? Any unsaved transaction edits in progress will be preserved locally on this device, but active session credentials will be cleared.',
+              }),
+              (0, D.jsxs)('div', {
+                className: 'flex items-center justify-end gap-2 pt-2 border-t border-border',
+                children: [
+                  (0, D.jsx)('button', {
+                    type: 'button',
+                    onClick: () => setLogoutConfirmOpen(false),
+                    className: 'px-4 py-2 text-xs font-semibold rounded-xl border border-border bg-secondary/50 hover:bg-secondary text-foreground transition-colors',
+                    children: 'Cancel',
+                  }),
+                  (0, D.jsx)('button', {
+                    type: 'button',
+                    onClick: async () => {
+                      setLogoutConfirmOpen(false);
+                      try {
+                        if (authLogout) await authLogout();
+                      } catch (e) {
+                        console.warn('Logout notice:', e);
+                      }
+                      try {
+                        let db = globalThis.__B44_DB__;
+                        if (db?.auth?.logout) await db.auth.logout();
+                      } catch (e) {
+                        console.warn('DB logout notice:', e);
+                      }
+                      sessionStorage.clear();
+                      window.location.replace('/login');
+                    },
+                    className: 'px-4 py-2 text-xs font-bold rounded-xl bg-rose-600 hover:bg-rose-700 text-white transition-colors shadow-sm',
+                    children: 'Sign Out Now',
+                  }),
+                ],
+              }),
+            ],
           }),
         ],
       }),

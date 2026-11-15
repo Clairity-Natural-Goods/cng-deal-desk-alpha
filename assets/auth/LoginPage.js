@@ -37,7 +37,7 @@ export function renderLoginPage(container, { onLogin, onRegister }) {
           <h1 id="auth-title" class="auth-card-brand">CNG GLOBAL</h1>
           <form id="auth-login-form" class="auth-form" novalidate>
             <label>
-              <span>Email or Username</span>
+              <span title="Email or Username" aria-label="Email or Username">Email</span>
               <input name="identifier" type="text" autocomplete="username" required placeholder="Enter your email">
             </label>
             <label>

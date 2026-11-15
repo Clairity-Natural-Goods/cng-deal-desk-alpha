@@ -1717,6 +1717,138 @@ runTest("PERSIST-05", "Pending Sync & Draft Preservation - Preserves pending_syn
 });
 
 // ==============================================================================
+// 12. V2 FRONTEND UPGRADE & FIELD EXPERIENCE TESTS (WAVES 1 - 8)
+// ==============================================================================
+
+// NAV-01: SideNav Logout Positioning & Confirmation Modal
+runTest("NAV-01", "Navigation - Logout placed in SideNav with unified confirmation dialog", () => {
+  const indexJsPath = path.join(projectRoot, "assets/index-A159RRyL.js");
+  const indexJs = fs.readFileSync(indexJsPath, "utf8");
+  assert.ok(indexJs.includes("Logout") || indexJs.includes("Sign Out"), "SideNav must contain Logout action");
+  assert.ok(indexJs.includes("Are you sure you want to sign out?"), "Logout confirmation modal must display warning message");
+  assert.ok(indexJs.includes("/login"), "Logout confirmation must redirect to /login");
+});
+
+// NAV-02: Scroll-Aware Bottom Navigation & Mobile Dynamic Viewport
+runTest("NAV-02", "Mobile UX - Scroll-aware bottom navigation hides on scroll down and reveals on scroll up", () => {
+  const indexJsPath = path.join(projectRoot, "assets/index-A159RRyL.js");
+  const indexJs = fs.readFileSync(indexJsPath, "utf8");
+  assert.ok(indexJs.includes("requestAnimationFrame"), "Bottom nav scroll handler must use requestAnimationFrame for fluid performance");
+  assert.ok(indexJs.includes("bottom-tab-bar"), "Scroll handler must target bottom-tab-bar element");
+  assert.ok(indexJs.includes("translateY"), "Bottom tab bar must animate via translateY transform");
+
+  const cssPath = path.join(projectRoot, "assets/index-y0Vz-zph.css");
+  const css = fs.readFileSync(cssPath, "utf8");
+  assert.ok(css.includes(".bottom-tab-bar"), "CSS must contain .bottom-tab-bar styling rules");
+  assert.ok(css.includes("transform"), "Bottom tab bar must configure transform transition in CSS");
+  assert.ok(css.includes("100dvh"), "CSS must use dynamic viewport units (100dvh) for mobile screens");
+});
+
+// ID-10: Controlled Reveal Modal & Audit Logging
+runTest("ID-10", "Identity Masking - Controlled reveal modal enforces purpose validation and audit logging", async () => {
+  const { pathToFileURL } = await import("url");
+  const { canUserRevealIdentity, recordDisclosureAudit, maskPersonName } = await import(
+    pathToFileURL(path.join(projectRoot, "assets/identityMasking.js")).href
+  );
+
+  // 1. Role validation
+  assert.strictEqual(canUserRevealIdentity({ role: "operator" }, "OPERATIONAL"), true, "Operators can access OPERATIONAL disclosure");
+  assert.strictEqual(canUserRevealIdentity({ role: "operator" }, "BANKING"), false, "Operators CANNOT access BANKING disclosure");
+  assert.strictEqual(canUserRevealIdentity({ role: "admin" }, "BANKING"), true, "Admins can access BANKING disclosure");
+  assert.strictEqual(canUserRevealIdentity({ role: "finance" }, "BANKING"), true, "Finance users can access BANKING disclosure");
+  assert.strictEqual(canUserRevealIdentity({ role: "anonymous" }, "OPERATIONAL"), false, "Unprivileged users rejected");
+
+  // 2. Audit recording mock verification
+  const auditLogs = [];
+  const mockSupabase = {
+    rpc: async (name, params) => {
+      auditLogs.push({ rpc: name, params });
+      return { data: { success: true }, error: null };
+    }
+  };
+
+  const auditResult = await recordDisclosureAudit(mockSupabase, {
+    partyId: "Amuru Farmers Co-op",
+    transactionId: "tx-test-12345",
+    purpose: "OPERATIONAL",
+    reason: "Field weighbridge ticket clearance",
+    userId: "usr-field-01",
+    username: "christine",
+    userRole: "operator"
+  });
+
+  assert.strictEqual(auditResult.success, true, "Audit record must report success");
+  assert.strictEqual(auditLogs.length, 1, "Audit log entry must be dispatched to Supabase RPC");
+  assert.strictEqual(auditLogs[0].params.p_purpose, "OPERATIONAL", "Audit log must record correct purpose");
+});
+
+// SRCH-01: Debounced Search & Multi-Criteria Filtering
+runTest("SRCH-01", "Transaction Search - 300ms debouncing, multi-filter criteria, and pagination", () => {
+  const txModPath = path.join(projectRoot, "assets/transactions/TransactionModule.js");
+  const txMod = fs.readFileSync(txModPath, "utf8");
+  assert.ok(txMod.includes("debouncedSearch"), "TransactionModule must implement debounced search state");
+  assert.ok(txMod.includes("filterCommodity"), "TransactionModule must filter by commodity");
+  assert.ok(txMod.includes("filterStatus"), "TransactionModule must filter by status");
+  assert.ok(txMod.includes("filterPayment"), "TransactionModule must filter by payment terms status");
+  assert.ok(txMod.includes("filterDateRange"), "TransactionModule must filter by timeframe");
+  assert.ok(txMod.includes("sortBy"), "TransactionModule must provide sorting options");
+  assert.ok(txMod.includes("paginatedTransactions"), "TransactionModule must provide paginated transaction display");
+  assert.ok(txMod.includes("Reset All Filters"), "TransactionModule must provide a quick reset all filters action");
+});
+
+// SAVE-01: 5-State Last-Saved Indicator
+runTest("SAVE-01", "Persistence UX - 5-state Last-Saved indicator with timestamps and error retry", () => {
+  const txModPath = path.join(projectRoot, "assets/transactions/TransactionModule.js");
+  const txMod = fs.readFileSync(txModPath, "utf8");
+  assert.ok(txMod.includes("renderSaveStateIndicator"), "TransactionModule must declare renderSaveStateIndicator helper");
+  assert.ok(txMod.includes("Saved locally — awaiting synchronisation"), "Must display saved locally state for offline resilience");
+  assert.ok(txMod.includes("Saved successfully"), "Must display saved successfully state for cloud confirmation");
+  assert.ok(txMod.includes("Saving..."), "Must display in-progress saving state");
+  assert.ok(txMod.includes("Save failed"), "Must display save failed error state with retry button");
+});
+
+// LANG-01: Farmer-Facing Plain Language Terminology
+runTest("LANG-01", "Field Operations - Plain language terms with kg conversion parity", () => {
+  const txModPath = path.join(projectRoot, "assets/transactions/TransactionModule.js");
+  const txMod = fs.readFileSync(txModPath, "utf8");
+  assert.ok(txMod.includes("Required Quantity — Kilograms (1 t = 1,000 kg)"), "Element 1 must label quantity in kilograms with metric tonne conversion");
+  assert.ok(txMod.includes("Confirmed Volume — Kilograms (1 t = 1,000 kg)"), "Element 2 must label confirmed volume in kilograms");
+  assert.ok(txMod.includes("Price per kilo (UGX)"), "Element 4 must label unit price as Price per kilo (UGX)");
+  assert.ok(txMod.includes("The amount you will be paid (UGX)"), "Element 4 must label net payout as The amount you will be paid");
+  assert.ok(txMod.includes("07 Submit"), "Element 7 must be labeled 07 Submit");
+});
+
+// PWA-01: Installable Progressive Web App & Offline Shell
+runTest("PWA-01", "PWA - Web app manifest, service worker shell caching, and API bypass rules", () => {
+  const manifestPath = path.join(projectRoot, "manifest.webmanifest");
+  assert.ok(fs.existsSync(manifestPath), "manifest.webmanifest must exist in root");
+  const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+  assert.strictEqual(manifest.display, "standalone", "PWA display mode must be standalone");
+  assert.ok(manifest.icons && manifest.icons.length >= 2, "Manifest must specify at least two icon sizes");
+
+  const swPath = path.join(projectRoot, "sw.js");
+  assert.ok(fs.existsSync(swPath), "sw.js service worker must exist in root");
+  const sw = fs.readFileSync(swPath, "utf8");
+  assert.ok(sw.includes("cng-deal-desk-shell"), "Service worker must manage cache bucket");
+  assert.ok(sw.includes("supabase.co") && sw.includes("/auth/v1/"), "Service worker must explicitly bypass caching for Supabase and Auth endpoints");
+
+  const htmlPath = path.join(projectRoot, "index.html");
+  const html = fs.readFileSync(htmlPath, "utf8");
+  assert.ok(html.includes('rel="manifest"'), "index.html must link manifest.webmanifest");
+  assert.ok(html.includes("serviceWorker.register"), "index.html must register service worker");
+});
+
+// REC-01: Safe Form Recovery & Isolated Draft Retention
+runTest("REC-01", "Form Recovery - User-isolated draft retention and recovery banner", () => {
+  const txModPath = path.join(projectRoot, "assets/transactions/TransactionModule.js");
+  const txMod = fs.readFileSync(txModPath, "utf8");
+  assert.ok(txMod.includes("cng_draft_"), "TransactionModule must isolate drafts by user ID and client ID");
+  assert.ok(txMod.includes("Unsaved local draft detected"), "TransactionModule must render recovery banner when uncommitted edits are found");
+  assert.ok(txMod.includes("Restore Edits"), "Recovery banner must offer Restore Edits action");
+  assert.ok(txMod.includes("Discard"), "Recovery banner must offer Discard action");
+});
+
+// ==============================================================================
 // SUMMARY
 // ==============================================================================
 await testQueue;

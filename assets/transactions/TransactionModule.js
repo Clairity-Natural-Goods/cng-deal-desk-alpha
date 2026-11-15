@@ -20,6 +20,16 @@ import {
   deleteOfflineTransaction,
 } from "../offline/offlineStore.js";
 import { normalizeCounterpartyName, normalizeDistrict } from "../supabaseRepository.js";
+import {
+  maskPersonName,
+  maskPhoneNumber,
+  maskEmailAddress,
+  maskContactAddress,
+  maskBankAccount,
+  canUserRevealIdentity,
+  recordDisclosureAudit,
+  maskTransaction,
+} from "../identityMasking.js";
 
 const React = toESM(reactExport(), 1);
 const { useState, useEffect, useMemo, useCallback } = React;
@@ -48,6 +58,92 @@ export default function TransactionModule() {
   const [toastMessage, setToastMessage] = useState(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [activeSection, setActiveSection] = useState(1); // 1..7 for Deal Pack accordion
+
+  // Wave 2: Controlled Identity Disclosure Modal & Audited Access
+  const [revealedTxIds, setRevealedTxIds] = useState(new Set());
+  const [revealModalOpen, setRevealModalOpen] = useState(false);
+  const [revealPurpose, setRevealPurpose] = useState("OPERATIONAL"); // 'OPERATIONAL' or 'BANKING'
+  const [revealReason, setRevealReason] = useState("");
+  const [revealError, setRevealError] = useState(null);
+  const [isRevealing, setIsRevealing] = useState(false);
+
+  // Wave 3: Debounced Search, Multi-Criteria Filtering & Pagination
+  const [debouncedSearch, setDebouncedSearch] = useState("");
+  const [filterCommodity, setFilterCommodity] = useState("all");
+  const [filterStatus, setFilterStatus] = useState("all");
+  const [filterPayment, setFilterPayment] = useState("all");
+  const [filterDateRange, setFilterDateRange] = useState("all");
+  const [sortBy, setSortBy] = useState("newest");
+  const [currentPage, setCurrentPage] = useState(1);
+  const PAGE_SIZE = 9;
+
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setDebouncedSearch(searchQuery);
+      setCurrentPage(1);
+    }, 300);
+    return () => clearTimeout(timer);
+  }, [searchQuery]);
+
+  // Wave 4: 5-State Last-Saved Indicator State
+  const [saveState, setSaveState] = useState({
+    status: "idle", // 'idle' | 'saving' | 'saved_locally' | 'saved_server' | 'sync_pending' | 'save_failed'
+    timestamp: null,
+    error: null,
+  });
+
+  // Wave 7: Safe Form Recovery & Local Draft Retention
+  const [recoveryDraft, setRecoveryDraft] = useState(null);
+  const [isDirty, setIsDirty] = useState(false);
+
+  // Check for stored draft when opening a transaction
+  const checkRecoveryDraft = useCallback((tx) => {
+    if (!tx || !tx.client_id) return;
+    try {
+      const draftKey = `cng_draft_${currentUser?.id || "anon"}_${tx.client_id}`;
+      const saved = localStorage.getItem(draftKey);
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        const draftTime = new Date(parsed.timestamp || 0).getTime();
+        const txTime = new Date(tx.updated_at || tx.created_at || 0).getTime();
+        if (draftTime > txTime + 2000) {
+          setRecoveryDraft(parsed);
+          return;
+        }
+      }
+    } catch (e) {}
+    setRecoveryDraft(null);
+  }, [currentUser]);
+
+  // Autosave form changes to local storage
+  const handleTxChange = useCallback((updatedTx) => {
+    setSelectedTx(updatedTx);
+    setIsDirty(true);
+    try {
+      if (updatedTx?.client_id) {
+        const draftKey = `cng_draft_${currentUser?.id || "anon"}_${updatedTx.client_id}`;
+        localStorage.setItem(
+          draftKey,
+          JSON.stringify({
+            timestamp: new Date().toISOString(),
+            tx: updatedTx,
+          })
+        );
+      }
+    } catch (e) {}
+  }, [currentUser]);
+
+  // Clear draft
+  const clearFormDraft = useCallback((clientId) => {
+    try {
+      if (clientId) {
+        const draftKey = `cng_draft_${currentUser?.id || "anon"}_${clientId}`;
+        localStorage.removeItem(draftKey);
+      }
+    } catch (e) {}
+    setRecoveryDraft(null);
+    setIsDirty(false);
+  }, [currentUser]);
 
   // Show temporary toast feedback
   const showToast = useCallback((msg, type = "success") => {
@@ -160,28 +256,70 @@ export default function TransactionModule() {
     refreshData();
   }, [refreshData]);
 
-  // Filtered transactions for list view
+  // Filtered & Sorted transactions for list view (Multi-Criteria & Debounced)
   const filteredTransactions = useMemo(() => {
-    return transactions.filter((tx) => {
-      // Tab filter
-      if (activeTab === "pending" && tx.sync_status !== "pending_sync" && tx.sync_status !== "sync_failed") return false;
-      if (activeTab === "draft" && tx.status !== "Draft" && tx.status !== "FieldCaptured") return false;
-      if (activeTab === "submitted" && tx.status !== "SubmittedForReview" && tx.status !== "PendingApproval") return false;
-      if (activeTab === "approved" && tx.status !== "Approved") return false;
+    return transactions
+      .filter((tx) => {
+        // Tab filter
+        if (activeTab === "pending" && tx.sync_status !== "pending_sync" && tx.sync_status !== "sync_failed") return false;
+        if (activeTab === "draft" && tx.status !== "Draft" && tx.status !== "FieldCaptured") return false;
+        if (activeTab === "submitted" && tx.status !== "SubmittedForReview" && tx.status !== "PendingApproval") return false;
+        if (activeTab === "approved" && tx.status !== "Approved") return false;
 
-      // Search query
-      if (searchQuery.trim()) {
-        const q = searchQuery.toLowerCase();
-        const refMatch = tx.reference?.toLowerCase().includes(q);
-        const buyerMatch = (tx.buyer_requirements?.buyer_name || "").toLowerCase().includes(q);
-        const supplierMatch = (tx.supplier_verification?.supplier_name || "").toLowerCase().includes(q);
-        const commMatch = (tx.commodity || "").toLowerCase().includes(q);
-        const officerMatch = (tx.created_by_name || "").toLowerCase().includes(q);
-        return refMatch || buyerMatch || supplierMatch || commMatch || officerMatch;
-      }
-      return true;
-    });
-  }, [transactions, activeTab, searchQuery]);
+        // Commodity filter
+        if (filterCommodity !== "all" && tx.commodity !== filterCommodity) return false;
+
+        // Status filter
+        if (filterStatus !== "all" && tx.status !== filterStatus) return false;
+
+        // Payment status filter
+        if (filterPayment !== "all" && tx.payment_terms?.payment_status !== filterPayment) return false;
+
+        // Date range filter
+        if (filterDateRange !== "all") {
+          const txDate = new Date(tx.created_at || tx.updated_at || Date.now());
+          const now = Date.now();
+          const dayMs = 24 * 60 * 60 * 1000;
+          if (filterDateRange === "today" && now - txDate.getTime() > dayMs) return false;
+          if (filterDateRange === "7d" && now - txDate.getTime() > 7 * dayMs) return false;
+          if (filterDateRange === "30d" && now - txDate.getTime() > 30 * dayMs) return false;
+        }
+
+        // Debounced search query
+        if (debouncedSearch.trim()) {
+          const q = debouncedSearch.toLowerCase();
+          const refMatch = (tx.reference || "").toLowerCase().includes(q);
+          const buyerMatch = (tx.buyer_requirements?.buyer_name || "").toLowerCase().includes(q);
+          const supplierMatch = (tx.supplier_verification?.supplier_name || "").toLowerCase().includes(q);
+          const commMatch = (tx.commodity || "").toLowerCase().includes(q);
+          const officerMatch = (tx.created_by_name || "").toLowerCase().includes(q);
+          return refMatch || buyerMatch || supplierMatch || commMatch || officerMatch;
+        }
+        return true;
+      })
+      .sort((a, b) => {
+        if (sortBy === "oldest") {
+          return new Date(a.created_at || 0) - new Date(b.created_at || 0);
+        }
+        if (sortBy === "ref") {
+          return (a.reference || "").localeCompare(b.reference || "");
+        }
+        if (sortBy === "tonnes") {
+          const tA = Number(a.buyer_requirements?.required_tonnes || 0);
+          const tB = Number(b.buyer_requirements?.required_tonnes || 0);
+          return tB - tA;
+        }
+        // default newest
+        return new Date(b.created_at || 0) - new Date(a.created_at || 0);
+      });
+  }, [transactions, activeTab, debouncedSearch, filterCommodity, filterStatus, filterPayment, filterDateRange, sortBy]);
+
+  // Paginated slice
+  const totalPages = Math.max(1, Math.ceil(filteredTransactions.length / PAGE_SIZE));
+  const paginatedTransactions = useMemo(() => {
+    const start = (currentPage - 1) * PAGE_SIZE;
+    return filteredTransactions.slice(start, start + PAGE_SIZE);
+  }, [filteredTransactions, currentPage, PAGE_SIZE]);
 
   // Create brand new transaction
   const handleCreateNew = () => {
@@ -364,10 +502,11 @@ export default function TransactionModule() {
     };
   };
 
-  // Save current record directly to Supabase database (with offline resilience)
+  // Save current record directly to Supabase database (with 5-state tracking & offline resilience)
   const handleSaveDraft = async () => {
     if (!selectedTx) return;
     setIsSubmitting(true);
+    setSaveState({ status: "saving", timestamp: new Date(), error: null });
     try {
       const updatedFeeMargin = recalculateFeeAndMargin(selectedTx);
       const updatedMatrix = recalculateDecisionMatrix(selectedTx.decision_matrix);
@@ -383,16 +522,21 @@ export default function TransactionModule() {
         // Direct write to Supabase database
         const savedServer = await saveTransactionToSupabase(recordToSave, currentUser);
         setSelectedTx(savedServer);
+        setSaveState({ status: "saved_server", timestamp: new Date(), error: null });
+        clearFormDraft(recordToSave.client_id);
         showToast("Draft saved directly to Supabase PostgreSQL database.", "success");
       } catch (dbErr) {
         console.warn("Direct database write failed, saving to local offline store:", dbErr);
         await saveOfflineTransaction(recordToSave, currentUser);
         setSelectedTx(recordToSave);
-        showToast(`Saved offline (${dbErr.message}). Will sync when connected.`, "warning");
+        setSaveState({ status: "saved_locally", timestamp: new Date(), error: null });
+        clearFormDraft(recordToSave.client_id);
+        showToast(`Saved locally — awaiting synchronisation (${dbErr.message}).`, "warning");
       }
 
       await refreshData();
     } catch (err) {
+      setSaveState({ status: "save_failed", timestamp: new Date(), error: err.message });
       showToast(`Error saving draft: ${err.message}`, "error");
     } finally {
       setIsSubmitting(false);
@@ -418,6 +562,7 @@ export default function TransactionModule() {
     }
 
     setIsSubmitting(true);
+    setSaveState({ status: "saving", timestamp: new Date(), error: null });
     try {
       const updatedFeeMargin = recalculateFeeAndMargin(selectedTx);
       const updatedMatrix = recalculateDecisionMatrix(selectedTx.decision_matrix);
@@ -432,16 +577,21 @@ export default function TransactionModule() {
       try {
         const savedServer = await saveTransactionToSupabase(recordToSave, currentUser);
         setSelectedTx(savedServer);
+        setSaveState({ status: "saved_server", timestamp: new Date(), error: null });
+        clearFormDraft(recordToSave.client_id);
         showToast("Deal Pack submitted and saved to Supabase database.", "success");
       } catch (dbErr) {
         console.warn("Direct DB submit notice, falling back to local queue:", dbErr);
         await saveOfflineTransaction(recordToSave, currentUser);
         setSelectedTx(recordToSave);
+        setSaveState({ status: "saved_locally", timestamp: new Date(), error: null });
+        clearFormDraft(recordToSave.client_id);
         showToast("Deal Pack queued locally for Clarence review.", "success");
       }
 
       await refreshData();
     } catch (err) {
+      setSaveState({ status: "save_failed", timestamp: new Date(), error: err.message });
       showToast(`Submission error: ${err.message}`, "error");
     } finally {
       setIsSubmitting(false);
@@ -518,6 +668,199 @@ export default function TransactionModule() {
     if (tx.decision_matrix?.total_score > 0) count++;
     if (tx.approval?.status === "Approved") count++;
     return count;
+  };
+
+  // Wave 4: 5-State Last-Saved Indicator Helper
+  const renderSaveStateIndicator = (state) => {
+    switch (state.status) {
+      case "saving":
+        return jsxs("div", {
+          className: "inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold bg-amber-50 dark:bg-amber-950/40 text-amber-700 dark:text-amber-300 border border-amber-200 dark:border-amber-800 animate-pulse",
+          children: [
+            jsx("span", { className: "w-1.5 h-1.5 rounded-full bg-amber-500 animate-ping" }),
+            jsx("span", { children: "Saving..." }),
+          ],
+        });
+      case "saved_locally":
+        return jsxs("div", {
+          className: "inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold bg-blue-50 dark:bg-blue-950/40 text-blue-700 dark:text-blue-300 border border-blue-200 dark:border-blue-800",
+          children: [
+            jsx("span", { children: "💾" }),
+            jsx("span", { children: "Saved locally — awaiting synchronisation" }),
+            state.timestamp && jsx("span", { className: "text-[10px] opacity-75 font-normal", children: `(${new Date(state.timestamp).toLocaleTimeString()})` }),
+          ],
+        });
+      case "saved_server":
+        return jsxs("div", {
+          className: "inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800",
+          children: [
+            jsx("span", { children: "☁️" }),
+            jsx("span", { children: "Saved successfully" }),
+            state.timestamp && jsx("span", { className: "text-[10px] opacity-75 font-normal", children: `(${new Date(state.timestamp).toLocaleTimeString()})` }),
+          ],
+        });
+      case "sync_pending":
+        return jsxs("div", {
+          className: "inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold bg-purple-50 dark:bg-purple-950/40 text-purple-700 dark:text-purple-300 border border-purple-200 dark:border-purple-800",
+          children: [
+            jsx("span", { children: "🔄" }),
+            jsx("span", { children: "Sync pending" }),
+          ],
+        });
+      case "save_failed":
+        return jsxs("div", {
+          className: "inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold bg-rose-50 dark:bg-rose-950/40 text-rose-700 dark:text-rose-300 border border-rose-200 dark:border-rose-800",
+          children: [
+            jsx("span", { children: "⚠️" }),
+            jsx("span", { children: "Save failed" }),
+            jsx("button", {
+              type: "button",
+              onClick: handleSaveDraft,
+              className: "ml-1 underline hover:no-underline font-bold",
+              children: "Retry",
+            }),
+          ],
+        });
+      default:
+        return null;
+    }
+  };
+
+  // Wave 2: Controlled Identity Disclosure Handler
+  const handleRevealIdentity = async () => {
+    if (!selectedTx) return;
+    setIsRevealing(true);
+    setRevealError(null);
+    try {
+      const allowed = canUserRevealIdentity(currentUser, revealPurpose);
+      if (!allowed) {
+        setRevealError(`PERMISSION DENIED: Your role (${currentUser?.role || "user"}) cannot access ${revealPurpose} counterparty details.`);
+        return;
+      }
+
+      const partyName = selectedTx.supplier_verification?.supplier_name || selectedTx.buyer_requirements?.buyer_name || "Counterparty";
+      await recordDisclosureAudit(supabase, {
+        partyId: partyName,
+        transactionId: selectedTx.client_id || selectedTx.id,
+        purpose: revealPurpose,
+        reason: revealReason || `Operational review by ${currentUser?.name || currentUser?.email || "User"}`,
+        userId: currentUser?.id,
+        username: currentUser?.username || currentUser?.name || currentUser?.email,
+        userRole: currentUser?.role || "operator",
+      });
+
+      const next = new Set(revealedTxIds);
+      next.add(selectedTx.client_id);
+      setRevealedTxIds(next);
+      setRevealModalOpen(false);
+      showToast(`Identity revealed under ${revealPurpose} clearance (Audited).`, "success");
+    } catch (err) {
+      setRevealError(`Audit error: ${err.message}`);
+    } finally {
+      setIsRevealing(false);
+    }
+  };
+
+  // Wave 8: Chronological Activity Timeline Helper
+  const renderActivityTimeline = (tx) => {
+    const isRevealed = revealedTxIds.has(tx.client_id);
+    const officerName = isRevealed ? (tx.created_by_name || "Field Officer") : maskPersonName(tx.created_by_name || "Field Officer");
+    const buyerName = isRevealed ? (tx.buyer_requirements?.buyer_name || "Pending") : maskPersonName(tx.buyer_requirements?.buyer_name || "Pending");
+    const supplierName = isRevealed ? (tx.supplier_verification?.supplier_name || "Pending") : maskPersonName(tx.supplier_verification?.supplier_name || "Pending");
+    const approverName = isRevealed ? (tx.approval?.approver_name || "Clarence") : maskPersonName(tx.approval?.approver_name || "Clarence");
+
+    const events = [
+      {
+        title: "Transaction Initiated",
+        desc: `Draft initiated by ${officerName} for ${tx.commodity || "Commodity"} (${tx.buyer_requirements?.required_tonnes || 0} tonnes)`,
+        time: tx.created_at ? new Date(tx.created_at).toLocaleString() : "Initial stage",
+        state: "done",
+      },
+      {
+        title: "Supplier Verification",
+        desc: `Supplier ${supplierName} recorded with status: ${tx.supplier_verification?.verification_status || "PENDING"} (${tx.supplier_verification?.moisture_reading_pct || "0"}% moisture)`,
+        time: tx.supplier_verification?.verification_date || "Pending",
+        state: tx.supplier_verification?.supplier_name ? "done" : "pending",
+      },
+      {
+        title: "Logistics & Collection",
+        desc: `Transporter: ${tx.transport_collection?.transporter_name || "Unassigned"} • Rate UGX ${(tx.transport_collection?.transport_rate_per_tonne || 0).toLocaleString()}/t`,
+        time: tx.transport_collection?.collection_status || "Planned",
+        state: tx.transport_collection?.transporter_name ? "done" : "pending",
+      },
+      {
+        title: "Payment Terms",
+        desc: `Agreed UGX ${(tx.payment_terms?.agreed_price_per_kg || 0).toLocaleString()}/kg • Method: ${tx.payment_terms?.payment_method || "Pending"}`,
+        time: "Locked",
+        state: Number(tx.payment_terms?.agreed_price_per_kg) > 0 ? "done" : "pending",
+      },
+      {
+        title: "Clarence Underwriting Review",
+        desc: `Decision: ${tx.approval?.status || tx.status || "Pending"} • Evaluated by: ${approverName}`,
+        time: tx.approval?.decision_date ? new Date(tx.approval.decision_date).toLocaleString() : "Awaiting review",
+        state: tx.status === "Approved" ? "approved" : tx.status === "Rejected" ? "rejected" : "pending",
+      },
+      {
+        title: "Supabase Cloud Database Sync",
+        desc: tx.sync_status === "synced" ? "Fully synchronized to PostgreSQL cloud database" : "Queued in local store",
+        time: tx.sync_status === "synced" ? "Confirmed" : "In Queue",
+        state: tx.sync_status === "synced" ? "done" : "pending",
+      },
+    ];
+
+    return jsxs("div", {
+      className: "mt-8 p-5 rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 shadow-sm space-y-4",
+      children: [
+        jsxs("div", {
+          className: "flex items-center justify-between border-b border-slate-100 dark:border-slate-800 pb-3",
+          children: [
+            jsxs("div", {
+              className: "flex items-center gap-2",
+              children: [
+                jsx("span", { className: "text-lg", children: "⏱️" }),
+                jsx("h4", { className: "font-bold text-sm text-slate-900 dark:text-slate-100", children: "Transaction Activity Timeline" }),
+              ],
+            }),
+            jsx("span", { className: "text-xs text-slate-500 font-mono", children: tx.reference }),
+          ],
+        }),
+        jsx("div", {
+          className: "relative pl-6 space-y-5 before:absolute before:left-2 before:top-2 before:bottom-2 before:w-0.5 before:bg-slate-200 dark:before:bg-slate-800",
+          children: events.map((ev, idx) =>
+            jsxs("div", {
+              key: idx,
+              className: "relative",
+              children: [
+                jsx("span", {
+                  className: cn(
+                    "absolute -left-6 top-1 w-4 h-4 rounded-full border-2 bg-white dark:bg-slate-900 flex items-center justify-center text-[9px] font-bold",
+                    ev.state === "done" || ev.state === "approved"
+                      ? "border-emerald-500 text-emerald-500"
+                      : ev.state === "rejected"
+                      ? "border-rose-500 text-rose-500"
+                      : "border-slate-300 dark:border-slate-700 text-slate-400"
+                  ),
+                  children: ev.state === "done" || ev.state === "approved" ? "✓" : ev.state === "rejected" ? "✕" : "○",
+                }),
+                jsxs("div", {
+                  className: "space-y-0.5",
+                  children: [
+                    jsxs("div", {
+                      className: "flex items-center justify-between gap-2 flex-wrap",
+                      children: [
+                        jsx("span", { className: "text-xs font-bold text-slate-900 dark:text-slate-100", children: ev.title }),
+                        jsx("span", { className: "text-[11px] text-slate-500", children: ev.time }),
+                      ],
+                    }),
+                    jsx("p", { className: "text-xs text-slate-600 dark:text-slate-400", children: ev.desc }),
+                  ],
+                }),
+              ],
+            })
+          ),
+        }),
+      ],
+    });
   };
 
   // Render Status Badge
@@ -736,18 +1079,144 @@ export default function TransactionModule() {
                     ],
                   }),
 
-                  // Search Input
-                  jsx("input", {
-                    type: "text",
-                    placeholder: "Search reference, buyer, supplier, officer...",
-                    value: searchQuery,
-                    onChange: (e) => setSearchQuery(e.target.value),
-                    className: "w-full sm:w-72 px-3 py-2 text-xs rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 focus:outline-emerald-600",
+                  // Debounced Search Input with Clear Action
+                  jsxs("div", {
+                    className: "relative w-full sm:w-72",
+                    children: [
+                      jsx("input", {
+                        type: "text",
+                        placeholder: "Search reference, buyer, supplier, officer...",
+                        value: searchQuery,
+                        onChange: (e) => setSearchQuery(e.target.value),
+                        className: "w-full pl-8 pr-7 py-2 text-xs rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 focus:outline-emerald-600",
+                      }),
+                      jsx("span", {
+                        className: "absolute left-2.5 top-2 text-xs text-slate-400 pointer-events-none",
+                        children: "🔍",
+                      }),
+                      searchQuery &&
+                        jsx("button", {
+                          type: "button",
+                          onClick: () => setSearchQuery(""),
+                          className: "absolute right-2.5 top-2 text-xs text-slate-400 hover:text-slate-600 dark:hover:text-slate-200",
+                          children: "✕",
+                        }),
+                    ],
                   }),
                 ],
               }),
 
-              // Transactions Card Listing
+              // Multi-Criteria Filter Controls & Sort Bar
+              jsxs("div", {
+                className: "flex flex-wrap items-center gap-2 p-2.5 rounded-xl bg-slate-50 dark:bg-slate-800/40 border border-slate-200 dark:border-slate-800 text-xs",
+                children: [
+                  // Commodity filter
+                  jsxs("div", {
+                    className: "flex items-center gap-1.5",
+                    children: [
+                      jsx("span", { className: "text-slate-500 font-medium", children: "Commodity:" }),
+                      jsx("select", {
+                        value: filterCommodity,
+                        onChange: (e) => { setFilterCommodity(e.target.value); setCurrentPage(1); },
+                        className: "p-1.5 rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 font-semibold",
+                        children: [
+                          jsx("option", { value: "all", children: "All Commodities" }),
+                          ...COMMODITIES.map((c) => jsx("option", { value: c, children: c }, c)),
+                        ],
+                      }),
+                    ],
+                  }),
+                  // Status filter
+                  jsxs("div", {
+                    className: "flex items-center gap-1.5",
+                    children: [
+                      jsx("span", { className: "text-slate-500 font-medium", children: "Status:" }),
+                      jsx("select", {
+                        value: filterStatus,
+                        onChange: (e) => { setFilterStatus(e.target.value); setCurrentPage(1); },
+                        className: "p-1.5 rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 font-semibold",
+                        children: [
+                          jsx("option", { value: "all", children: "All Statuses" }),
+                          jsx("option", { value: "Draft", children: "Draft" }),
+                          jsx("option", { value: "SubmittedForReview", children: "Review Queue" }),
+                          jsx("option", { value: "Approved", children: "Approved" }),
+                        ],
+                      }),
+                    ],
+                  }),
+                  // Payment filter
+                  jsxs("div", {
+                    className: "flex items-center gap-1.5",
+                    children: [
+                      jsx("span", { className: "text-slate-500 font-medium", children: "Payment:" }),
+                      jsx("select", {
+                        value: filterPayment,
+                        onChange: (e) => { setFilterPayment(e.target.value); setCurrentPage(1); },
+                        className: "p-1.5 rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 font-semibold",
+                        children: [
+                          jsx("option", { value: "all", children: "All Payments" }),
+                          jsx("option", { value: "Agreed", children: "Agreed" }),
+                          jsx("option", { value: "Reported", children: "Reported" }),
+                          jsx("option", { value: "Verified", children: "Verified" }),
+                        ],
+                      }),
+                    ],
+                  }),
+                  // Timeframe filter
+                  jsxs("div", {
+                    className: "flex items-center gap-1.5",
+                    children: [
+                      jsx("span", { className: "text-slate-500 font-medium", children: "Timeframe:" }),
+                      jsx("select", {
+                        value: filterDateRange,
+                        onChange: (e) => { setFilterDateRange(e.target.value); setCurrentPage(1); },
+                        className: "p-1.5 rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 font-semibold",
+                        children: [
+                          jsx("option", { value: "all", children: "All Time" }),
+                          jsx("option", { value: "today", children: "Today" }),
+                          jsx("option", { value: "7d", children: "Last 7 Days" }),
+                          jsx("option", { value: "30d", children: "Last 30 Days" }),
+                        ],
+                      }),
+                    ],
+                  }),
+                  // Sort By
+                  jsxs("div", {
+                    className: "flex items-center gap-1.5",
+                    children: [
+                      jsx("span", { className: "text-slate-500 font-medium", children: "Sort:" }),
+                      jsx("select", {
+                        value: sortBy,
+                        onChange: (e) => setSortBy(e.target.value),
+                        className: "p-1.5 rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 font-semibold",
+                        children: [
+                          jsx("option", { value: "newest", children: "Newest First" }),
+                          jsx("option", { value: "oldest", children: "Oldest First" }),
+                          jsx("option", { value: "ref", children: "Reference (A-Z)" }),
+                          jsx("option", { value: "tonnes", children: "Volume (High-Low)" }),
+                        ],
+                      }),
+                    ],
+                  }),
+                  // Quick Reset
+                  (filterCommodity !== "all" || filterStatus !== "all" || filterPayment !== "all" || filterDateRange !== "all" || searchQuery) &&
+                    jsx("button", {
+                      type: "button",
+                      onClick: () => {
+                        setFilterCommodity("all");
+                        setFilterStatus("all");
+                        setFilterPayment("all");
+                        setFilterDateRange("all");
+                        setSearchQuery("");
+                        setCurrentPage(1);
+                      },
+                      className: "ml-auto px-2.5 py-1 text-xs font-semibold rounded-lg bg-rose-50 text-rose-700 hover:bg-rose-100 dark:bg-rose-950/40 dark:text-rose-300 border border-rose-200 dark:border-rose-800",
+                      children: "Reset All Filters",
+                    }),
+                ],
+              }),
+
+              // Transactions Card Listing (Masked by default with pagination)
               filteredTransactions.length === 0
                 ? jsxs("div", {
                     className: "text-center py-16 px-4 border border-dashed rounded-2xl border-slate-300 dark:border-slate-800",
@@ -761,131 +1230,190 @@ export default function TransactionModule() {
                       }),
                     ],
                   })
-                : jsx("div", {
-                    className: "grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4",
-                    children: filteredTransactions.map((tx) => {
-                      const completedCount = getCompletenessCount(tx);
-                      return jsxs(
-                        "div",
-                        {
-                          key: tx.client_id,
-                          className: "p-5 rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 shadow-sm hover:shadow-md transition-all flex flex-col justify-between space-y-4",
-                          children: [
-                            jsxs("div", {
-                              className: "space-y-3",
+                : jsxs("div", {
+                    className: "space-y-4",
+                    children: [
+                      jsx("div", {
+                        className: "grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4",
+                        children: paginatedTransactions.map((tx) => {
+                          const completedCount = getCompletenessCount(tx);
+                          const isRevealed = revealedTxIds.has(tx.client_id);
+                          const rawBuyer = tx.buyer_requirements?.buyer_name || "Pending";
+                          const rawSupplier = tx.supplier_verification?.supplier_name || "Pending";
+                          const displayBuyer = isRevealed ? rawBuyer : maskPersonName(rawBuyer);
+                          const displaySupplier = isRevealed ? rawSupplier : maskPersonName(rawSupplier);
+
+                          return jsxs(
+                            "div",
+                            {
+                              key: tx.client_id,
+                              className: "p-5 rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 shadow-sm hover:shadow-md transition-all flex flex-col justify-between space-y-4",
                               children: [
-                                // Top row: Reference & Badges (Contained on mobile)
                                 jsxs("div", {
-                                  className: "flex items-start justify-between gap-2 flex-wrap sm:flex-nowrap min-w-0 max-w-full",
+                                  className: "space-y-3",
                                   children: [
+                                    // Top row: Reference & Badges (Contained on mobile)
                                     jsxs("div", {
-                                      className: "min-w-0 max-w-full",
+                                      className: "flex items-start justify-between gap-2 flex-wrap sm:flex-nowrap min-w-0 max-w-full",
                                       children: [
-                                        jsx("span", {
-                                          className: "font-mono font-bold text-sm tracking-tight text-slate-900 dark:text-slate-100 block truncate",
-                                          children: tx.reference,
+                                        jsxs("div", {
+                                          className: "min-w-0 max-w-full",
+                                          children: [
+                                            jsx("span", {
+                                              className: "font-mono font-bold text-sm tracking-tight text-slate-900 dark:text-slate-100 block truncate",
+                                              children: tx.reference,
+                                            }),
+                                            jsx("div", {
+                                              className: "text-[11px] text-slate-500",
+                                              children: tx.created_at ? new Date(tx.created_at).toLocaleDateString() : "Just now",
+                                            }),
+                                          ],
+                                        }),
+                                        jsxs("div", {
+                                          className: "flex flex-wrap sm:flex-col items-end gap-1 shrink-0 max-w-full",
+                                          children: [
+                                            renderStatusBadge(tx.status),
+                                            renderSyncBadge(tx.sync_status, tx.sync_error),
+                                          ],
+                                        }),
+                                      ],
+                                    }),
+
+                                    // Buyer & Supplier summary (Identity Masked by Default)
+                                    jsxs("div", {
+                                      className: "p-3 rounded-xl bg-slate-50 dark:bg-slate-800/60 space-y-1.5 text-xs",
+                                      children: [
+                                        jsxs("div", {
+                                          className: "flex justify-between items-center",
+                                          children: [
+                                            jsx("span", { className: "text-slate-600 dark:text-slate-300 font-medium", children: "Buyer:" }),
+                                            jsxs("span", {
+                                              className: "font-semibold text-slate-900 dark:text-slate-100 truncate max-w-[160px] flex items-center gap-1",
+                                              children: [
+                                                !isRevealed && rawBuyer !== "Pending" && jsx("span", { className: "text-[10px] text-slate-400", children: "🔒" }),
+                                                displayBuyer,
+                                              ],
+                                            }),
+                                          ],
+                                        }),
+                                        jsxs("div", {
+                                          className: "flex justify-between items-center",
+                                          children: [
+                                            jsx("span", { className: "text-slate-600 dark:text-slate-300 font-medium", children: "Supplier:" }),
+                                            jsxs("span", {
+                                              className: "font-semibold text-slate-900 dark:text-slate-100 truncate max-w-[160px] flex items-center gap-1",
+                                              children: [
+                                                !isRevealed && rawSupplier !== "Pending" && jsx("span", { className: "text-[10px] text-slate-400", children: "🔒" }),
+                                                displaySupplier,
+                                              ],
+                                            }),
+                                          ],
+                                        }),
+                                        jsxs("div", {
+                                          className: "flex justify-between",
+                                          children: [
+                                            jsx("span", { className: "text-slate-600 dark:text-slate-300 font-medium", children: "Commodity:" }),
+                                            jsxs("span", { className: "font-semibold text-emerald-700 dark:text-emerald-400", children: [tx.commodity, " • ", tx.supplier_verification?.confirmed_tonnes || tx.buyer_requirements?.required_tonnes || 0, " t (", ((tx.supplier_verification?.confirmed_tonnes || tx.buyer_requirements?.required_tonnes || 0) * 1000).toLocaleString(), " kg)"] }),
+                                          ],
+                                        }),
+                                        jsxs("div", {
+                                          className: "flex justify-between",
+                                          children: [
+                                            jsx("span", { className: "text-slate-600 dark:text-slate-300 font-medium", children: "Moisture:" }),
+                                            jsx("span", { className: "font-semibold text-slate-900 dark:text-slate-100", children: tx.supplier_verification?.moisture_reading_pct ? `${tx.supplier_verification.moisture_reading_pct}%` : "Not tested" }),
+                                          ],
+                                        }),
+                                      ],
+                                    }),
+
+                                    // Progress bar for 7 Deal Pack elements
+                                    jsxs("div", {
+                                      className: "space-y-1",
+                                      children: [
+                                        jsxs("div", {
+                                          className: "flex justify-between text-[11px] text-slate-600 dark:text-slate-300",
+                                          children: [
+                                            jsx("span", { children: "Deal Pack Elements" }),
+                                            jsxs("span", { className: "font-semibold text-slate-900 dark:text-slate-100", children: [completedCount, " / 7 Complete"] }),
+                                          ],
                                         }),
                                         jsx("div", {
-                                          className: "text-[11px] text-slate-500",
-                                          children: tx.created_at ? new Date(tx.created_at).toLocaleDateString() : "Just now",
+                                          className: "w-full h-1.5 rounded-full bg-slate-100 dark:bg-slate-800 overflow-hidden",
+                                          children: jsx("div", {
+                                            className: cn(
+                                              "h-full rounded-full transition-all",
+                                              completedCount === 7 ? "bg-emerald-600" : completedCount >= 4 ? "bg-amber-500" : "bg-blue-600"
+                                            ),
+                                            style: { width: `${(completedCount / 7) * 100}%` },
+                                          }),
                                         }),
                                       ],
                                     }),
-                                    jsxs("div", {
-                                      className: "flex flex-wrap sm:flex-col items-end gap-1 shrink-0 max-w-full",
-                                      children: [
-                                        renderStatusBadge(tx.status),
-                                        renderSyncBadge(tx.sync_status, tx.sync_error),
-                                      ],
-                                    }),
                                   ],
                                 }),
 
-                                // Buyer & Supplier summary
+                                // Bottom actions
                                 jsxs("div", {
-                                  className: "p-3 rounded-xl bg-slate-50 dark:bg-slate-800/60 space-y-1 text-xs",
+                                  className: "flex items-center justify-between pt-2 border-t border-slate-100 dark:border-slate-800 text-xs",
                                   children: [
-                                    jsxs("div", {
-                                      className: "flex justify-between",
-                                      children: [
-                                        jsx("span", { className: "text-slate-600 dark:text-slate-300 font-medium", children: "Buyer:" }),
-                                        jsx("span", { className: "font-semibold text-slate-900 dark:text-slate-100 truncate max-w-[160px]", children: tx.buyer_requirements?.buyer_name || "Pending" }),
-                                      ],
+                                    jsx("span", {
+                                      className: "text-[11px] text-slate-600 dark:text-slate-300 truncate max-w-[140px]",
+                                      children: `By: ${tx.created_by_name || "Field Officer"}`,
                                     }),
-                                    jsxs("div", {
-                                      className: "flex justify-between",
-                                      children: [
-                                        jsx("span", { className: "text-slate-600 dark:text-slate-300 font-medium", children: "Supplier:" }),
-                                        jsx("span", { className: "font-semibold text-slate-900 dark:text-slate-100 truncate max-w-[160px]", children: tx.supplier_verification?.supplier_name || "Pending" }),
-                                      ],
-                                    }),
-                                    jsxs("div", {
-                                      className: "flex justify-between",
-                                      children: [
-                                        jsx("span", { className: "text-slate-600 dark:text-slate-300 font-medium", children: "Commodity:" }),
-                                        jsxs("span", { className: "font-semibold text-emerald-700 dark:text-emerald-400", children: [tx.commodity, " • ", tx.supplier_verification?.confirmed_tonnes || tx.buyer_requirements?.required_tonnes || 0, " t"] }),
-                                      ],
-                                    }),
-                                    jsxs("div", {
-                                      className: "flex justify-between",
-                                      children: [
-                                        jsx("span", { className: "text-slate-600 dark:text-slate-300 font-medium", children: "Moisture:" }),
-                                        jsx("span", { className: "font-semibold text-slate-900 dark:text-slate-100", children: tx.supplier_verification?.moisture_reading_pct ? `${tx.supplier_verification.moisture_reading_pct}%` : "Not tested" }),
-                                      ],
-                                    }),
-                                  ],
-                                }),
-
-                                // Progress bar for 7 Deal Pack elements
-                                jsxs("div", {
-                                  className: "space-y-1",
-                                  children: [
-                                    jsxs("div", {
-                                      className: "flex justify-between text-[11px] text-slate-600 dark:text-slate-300",
-                                      children: [
-                                        jsx("span", { children: "Deal Pack Elements" }),
-                                        jsxs("span", { className: "font-semibold text-slate-900 dark:text-slate-100", children: [completedCount, " / 7 Complete"] }),
-                                      ],
-                                    }),
-                                    jsx("div", {
-                                      className: "w-full h-1.5 rounded-full bg-slate-100 dark:bg-slate-800 overflow-hidden",
-                                      children: jsx("div", {
-                                        className: cn(
-                                          "h-full rounded-full transition-all",
-                                          completedCount === 7 ? "bg-emerald-600" : completedCount >= 4 ? "bg-amber-500" : "bg-blue-600"
-                                        ),
-                                        style: { width: `${(completedCount / 7) * 100}%` },
-                                      }),
+                                    jsx("button", {
+                                      type: "button",
+                                      onClick: () => {
+                                        setSelectedTx(tx);
+                                        checkRecoveryDraft(tx);
+                                        setActiveSection(1);
+                                      },
+                                      className: "px-3 py-1.5 rounded-lg bg-emerald-50 text-emerald-800 hover:bg-emerald-100 dark:bg-emerald-950/60 dark:text-emerald-300 font-semibold transition-all",
+                                      children: "Open Deal Pack →",
                                     }),
                                   ],
                                 }),
                               ],
-                            }),
+                            },
+                            tx.client_id
+                          );
+                        }),
+                      }),
 
-                            // Bottom actions
+                      // Pagination Controls
+                      totalPages > 1 &&
+                        jsxs("div", {
+                          className: "flex flex-col sm:flex-row items-center justify-between gap-3 p-3.5 rounded-xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 text-xs shadow-sm",
+                          children: [
+                            jsx("span", {
+                              className: "text-slate-500 font-medium",
+                              children: `Showing ${(currentPage - 1) * PAGE_SIZE + 1} - ${Math.min(currentPage * PAGE_SIZE, filteredTransactions.length)} of ${filteredTransactions.length} records`,
+                            }),
                             jsxs("div", {
-                              className: "flex items-center justify-between pt-2 border-t border-slate-100 dark:border-slate-800 text-xs",
+                              className: "flex items-center gap-2",
                               children: [
+                                jsx("button", {
+                                  type: "button",
+                                  disabled: currentPage <= 1,
+                                  onClick: () => setCurrentPage((p) => Math.max(1, p - 1)),
+                                  className: "px-3 py-1.5 rounded-lg border border-slate-300 dark:border-slate-700 disabled:opacity-40 hover:bg-slate-50 dark:hover:bg-slate-800 font-semibold transition-all",
+                                  children: "← Previous",
+                                }),
                                 jsx("span", {
-                                  className: "text-[11px] text-slate-600 dark:text-slate-300 truncate max-w-[140px]",
-                                  children: `By: ${tx.created_by_name || "Field Officer"}`,
+                                  className: "font-semibold px-2 text-slate-700 dark:text-slate-300",
+                                  children: `Page ${currentPage} of ${totalPages}`,
                                 }),
                                 jsx("button", {
                                   type: "button",
-                                  onClick: () => {
-                                    setSelectedTx(tx);
-                                    setActiveSection(1);
-                                  },
-                                  className: "px-3 py-1.5 rounded-lg bg-emerald-50 text-emerald-800 hover:bg-emerald-100 dark:bg-emerald-950/60 dark:text-emerald-300 font-semibold transition-all",
-                                  children: "Open Deal Pack →",
+                                  disabled: currentPage >= totalPages,
+                                  onClick: () => setCurrentPage((p) => Math.min(totalPages, p + 1)),
+                                  className: "px-3 py-1.5 rounded-lg border border-slate-300 dark:border-slate-700 disabled:opacity-40 hover:bg-slate-50 dark:hover:bg-slate-800 font-semibold transition-all",
+                                  children: "Next →",
                                 }),
                               ],
                             }),
                           ],
-                        },
-                        tx.client_id
-                      );
-                    }),
+                        }),
+                    ],
                   }),
             ],
           })
@@ -922,6 +1450,7 @@ export default function TransactionModule() {
                               }),
                               renderStatusBadge(selectedTx.status),
                               renderSyncBadge(selectedTx.sync_status, selectedTx.sync_error),
+                              renderSaveStateIndicator(saveState),
                             ],
                           }),
                           jsxs("div", {
@@ -938,10 +1467,33 @@ export default function TransactionModule() {
                     ],
                   }),
 
-                  // Action buttons
+                  // Action buttons & Identity Reveal Trigger
                   jsxs("div", {
                     className: "flex flex-wrap items-center gap-2",
                     children: [
+                      // Identity Reveal Toggle Button
+                      revealedTxIds.has(selectedTx.client_id)
+                        ? jsx("button", {
+                            type: "button",
+                            onClick: () => {
+                              const next = new Set(revealedTxIds);
+                              next.delete(selectedTx.client_id);
+                              setRevealedTxIds(next);
+                              showToast("Counterparty identity details re-masked.", "info");
+                            },
+                            className: "px-3 py-2 text-xs font-bold rounded-xl bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300 border border-slate-300 dark:border-slate-700 flex items-center gap-1.5",
+                            children: [jsx("span", { children: "🔒" }), "Re-mask Details"],
+                          })
+                        : jsx("button", {
+                            type: "button",
+                            onClick: () => {
+                              setRevealModalOpen(true);
+                              setRevealError(null);
+                              setRevealReason("");
+                            },
+                            className: "px-3 py-2 text-xs font-bold rounded-xl bg-amber-50 hover:bg-amber-100 dark:bg-amber-950/40 dark:hover:bg-amber-900/60 text-amber-800 dark:text-amber-200 border border-amber-300 dark:border-amber-700 flex items-center gap-1.5",
+                            children: [jsx("span", { children: "👁️" }), "Reveal Identity Info"],
+                          }),
                       jsx("button", {
                         type: "button",
                         onClick: handleSaveDraft,
@@ -961,6 +1513,50 @@ export default function TransactionModule() {
                 ],
               }),
 
+              // Safe Recovery Draft Alert Banner (Wave 7)
+              recoveryDraft &&
+                jsxs("div", {
+                  className: "p-4 rounded-xl border border-amber-300 dark:border-amber-700 bg-amber-50 dark:bg-amber-950/40 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 shadow-sm",
+                  children: [
+                    jsxs("div", {
+                      className: "flex items-center gap-3",
+                      children: [
+                        jsx("span", { className: "text-2xl", children: "⚠️" }),
+                        jsxs("div", {
+                          children: [
+                            jsx("div", { className: "text-sm font-bold text-amber-900 dark:text-amber-200", children: "Unsaved local draft detected" }),
+                            jsx("div", { className: "text-xs text-amber-700 dark:text-amber-400 mt-0.5", children: `You have uncommitted edits saved on this device from ${new Date(recoveryDraft.timestamp).toLocaleTimeString()}. Would you like to restore where you stopped?` }),
+                          ],
+                        }),
+                      ],
+                    }),
+                    jsxs("div", {
+                      className: "flex items-center gap-2 self-end sm:self-auto shrink-0",
+                      children: [
+                        jsx("button", {
+                          type: "button",
+                          onClick: () => {
+                            setSelectedTx(recoveryDraft.tx);
+                            setRecoveryDraft(null);
+                            showToast("Restored unsaved draft edits.", "success");
+                          },
+                          className: "px-3 py-1.5 text-xs font-bold rounded-lg bg-amber-600 hover:bg-amber-700 text-white shadow-sm",
+                          children: "Restore Edits",
+                        }),
+                        jsx("button", {
+                          type: "button",
+                          onClick: () => {
+                            clearFormDraft(selectedTx.client_id);
+                            showToast("Unsaved draft discarded.", "info");
+                          },
+                          className: "px-3 py-1.5 text-xs font-medium rounded-lg border border-amber-300 dark:border-amber-700 text-amber-800 dark:text-amber-300 hover:bg-amber-100 dark:hover:bg-amber-900/40",
+                          children: "Discard",
+                        }),
+                      ],
+                    }),
+                  ],
+                }),
+
               // 7 Section Stepper / Selector
               jsx("div", {
                 className: "grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 gap-2",
@@ -971,7 +1567,7 @@ export default function TransactionModule() {
                   { num: 4, title: "04 Payment" },
                   { num: 5, title: "05 CNG Margin" },
                   { num: 6, title: "06 Matrix Score" },
-                  { num: 7, title: "07 Clarence Approval" },
+                  { num: 7, title: "07 Submit" },
                 ].map((sec) =>
                   jsxs(
                     "button",
@@ -1050,7 +1646,7 @@ export default function TransactionModule() {
                               jsxs("label", {
                                 className: "space-y-1 font-semibold",
                                 children: [
-                                  jsx("span", { children: "Required Quantity (Tonnes) *" }),
+                                  jsx("span", { children: "Required Quantity — Kilograms (1 t = 1,000 kg) *" }),
                                   jsx("input", {
                                     type: "number",
                                     step: "0.1",
@@ -1195,7 +1791,7 @@ export default function TransactionModule() {
                               jsxs("label", {
                                 className: "space-y-1 font-semibold",
                                 children: [
-                                  jsx("span", { children: "Confirmed Volume (Tonnes) *" }),
+                                  jsx("span", { children: "Confirmed Volume — Kilograms (1 t = 1,000 kg) *" }),
                                   jsx("input", {
                                     type: "number",
                                     step: "0.1",
@@ -1428,7 +2024,7 @@ export default function TransactionModule() {
                               jsxs("label", {
                                 className: "space-y-1 font-semibold",
                                 children: [
-                                  jsx("span", { children: "Agreed Price Per Kg (UGX) *" }),
+                                  jsx("span", { children: "Price per kilo (UGX) *" }),
                                   jsx("input", {
                                     type: "number",
                                     value: selectedTx.payment_terms.agreed_price_per_kg,
@@ -1518,7 +2114,7 @@ export default function TransactionModule() {
                               jsxs("label", {
                                 className: "space-y-1 font-semibold",
                                 children: [
-                                  jsx("span", { children: "Outstanding Balance (UGX)" }),
+                                  jsx("span", { children: "The amount you will be paid (UGX)" }),
                                   jsx("input", {
                                     type: "number",
                                     value: selectedTx.payment_terms.outstanding_balance,
@@ -1932,8 +2528,112 @@ export default function TransactionModule() {
                   }),
                 ],
               }),
+
+              // Wave 8: Chronological Activity Timeline
+              renderActivityTimeline(selectedTx),
             ],
           }),
+
+      // Wave 2: Controlled Identity Disclosure Modal Dialog
+      revealModalOpen &&
+        jsxs("div", {
+          className: "fixed inset-0 z-[2147483600] flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm",
+          children: [
+            jsxs("div", {
+              className: "w-full max-w-md p-6 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-2xl space-y-4 max-h-[90dvh] overflow-y-auto",
+              children: [
+                jsxs("div", {
+                  className: "flex items-center justify-between border-b border-slate-100 dark:border-slate-800 pb-3",
+                  children: [
+                    jsxs("div", {
+                      className: "flex items-center gap-2",
+                      children: [
+                        jsx("span", { className: "text-xl", children: "🛡️" }),
+                        jsx("h3", { className: "font-bold text-base text-slate-900 dark:text-slate-100", children: "Identity Disclosure Clearance" }),
+                      ],
+                    }),
+                    jsx("button", {
+                      type: "button",
+                      onClick: () => setRevealModalOpen(false),
+                      className: "text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 text-lg p-1",
+                      children: "✕",
+                    }),
+                  ],
+                }),
+                jsx("p", {
+                  className: "text-xs text-slate-600 dark:text-slate-300 leading-relaxed",
+                  children: "Unmasking buyer and supplier personal contact details requires operational or banking authorization. Every reveal action is recorded with an immutable audit log.",
+                }),
+                revealError &&
+                  jsx("div", {
+                    className: "p-3 rounded-xl border border-rose-200 bg-rose-50 dark:bg-rose-950/40 text-xs text-rose-700 dark:text-rose-300 font-medium",
+                    children: revealError,
+                  }),
+                jsxs("div", {
+                  className: "space-y-3 text-xs",
+                  children: [
+                    jsxs("label", {
+                      className: "block space-y-1 font-semibold text-slate-700 dark:text-slate-300",
+                      children: [
+                        jsx("span", { children: "Disclosure Purpose *" }),
+                        jsx("select", {
+                          value: revealPurpose,
+                          onChange: (e) => setRevealPurpose(e.target.value),
+                          className: "w-full p-2.5 rounded-lg border border-slate-300 dark:border-slate-700 bg-transparent font-normal",
+                          children: [
+                            jsx("option", { value: "OPERATIONAL", children: "OPERATIONAL — Field Logistics & Dispatch" }),
+                            jsx("option", { value: "BANKING", children: "BANKING — Settlement & Banking Compliance" }),
+                          ],
+                        }),
+                      ],
+                    }),
+                    jsxs("label", {
+                      className: "block space-y-1 font-semibold text-slate-700 dark:text-slate-300",
+                      children: [
+                        jsx("span", { children: "Business Justification Reason *" }),
+                        jsx("textarea", {
+                          rows: 3,
+                          value: revealReason,
+                          onChange: (e) => setRevealReason(e.target.value),
+                          placeholder: "e.g. Weighbridge clearance and supplier mobile money disbursement",
+                          className: "w-full p-2.5 rounded-lg border border-slate-300 dark:border-slate-700 bg-transparent font-normal",
+                        }),
+                      ],
+                    }),
+                    jsxs("div", {
+                      className: "p-2.5 rounded-lg bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700 text-[11px] text-slate-500",
+                      children: [
+                        "Authorized user: ",
+                        jsx("strong", { children: currentUser?.name || currentUser?.email || "Unknown" }),
+                        " (Role: ",
+                        jsx("strong", { children: currentUser?.role || "operator" }),
+                        ")",
+                      ],
+                    }),
+                  ],
+                }),
+                jsxs("div", {
+                  className: "flex items-center justify-end gap-2 pt-2 border-t border-slate-100 dark:border-slate-800",
+                  children: [
+                    jsx("button", {
+                      type: "button",
+                      onClick: () => setRevealModalOpen(false),
+                      className: "px-4 py-2 text-xs font-semibold rounded-xl border border-slate-300 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800",
+                      children: "Cancel",
+                    }),
+                    jsx("button", {
+                      type: "button",
+                      onClick: handleRevealIdentity,
+                      disabled: isRevealing,
+                      className: "px-4 py-2 text-xs font-bold rounded-xl bg-amber-600 hover:bg-amber-700 text-white shadow-sm disabled:opacity-50",
+                      children: isRevealing ? "Verifying..." : "Verify & Reveal Identity",
+                    }),
+                  ],
+                }),
+              ],
+            }),
+          ],
+        }),
     ],
   });
 }
