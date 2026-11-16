@@ -32,7 +32,8 @@ import {
 } from "../identityMasking.js";
 
 const React = toESM(reactExport(), 1);
-const { useState, useEffect, useMemo, useCallback } = React;
+const { useState, useEffect, useMemo, useCallback, useRef } = React;
+import { classifyCostInput, COST_STATUS, evaluateReadyReadiness } from "../matrix/financialEngine.js";
 const { jsx, jsxs } = jsxRuntime();
 
 // Master Commodities & Districts
@@ -58,6 +59,7 @@ export default function TransactionModule() {
   const [toastMessage, setToastMessage] = useState(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [activeSection, setActiveSection] = useState(1); // 1..7 for Deal Pack accordion
+  const inFlightRef = useRef(false); // Synchronous guard against double submissions
 
   // Wave 2: Controlled Identity Disclosure Modal & Audited Access
   const [revealedTxIds, setRevealedTxIds] = useState(new Set());
@@ -76,6 +78,15 @@ export default function TransactionModule() {
   const [sortBy, setSortBy] = useState("newest");
   const [currentPage, setCurrentPage] = useState(1);
   const PAGE_SIZE = 9;
+
+  // Phase 7: Operational Event & Management Approval Local States
+  const [rejectionReasonInput, setRejectionReasonInput] = useState("");
+  const [intakeInputKg, setIntakeInputKg] = useState("");
+  const [intakeInputRef, setIntakeInputRef] = useState("");
+  const [intakeInputNotes, setIntakeInputNotes] = useState("");
+  const [collectionInputKg, setCollectionInputKg] = useState("");
+  const [collectionInputRef, setCollectionInputRef] = useState("");
+  const [collectionInputNotes, setCollectionInputNotes] = useState("");
 
   useEffect(() => {
     const timer = setTimeout(() => {
@@ -358,16 +369,54 @@ export default function TransactionModule() {
       },
       transport_collection: {
         arrangement: "Company-arranged",
-        collection_point: "",
-        destination: "",
-        transporter_name: "",
-        transporter_contact: "",
+        collection_point: "Amuru Bulking Station",
+        destination: "Gulu Grain Processing Silo #2",
+        transporter_name: "Northern Hauliers Uganda",
+        transporter_contact: "+256 772 100 200",
         estimated_tonnes: 30,
         transport_rate_per_tonne: 25000,
         total_transport_cost: 750000,
         collection_status: "Planned",
-        waybill_ref: "",
-        notes: "",
+        waybill_ref: "WB-2026-001",
+        notes: "Direct farm-gate to central bulking handoff.",
+        handoff_location: {
+          hub_name: "Amuru Central Bulking Hub",
+          district: "Amuru",
+          physical_reference: "Plot 14, Gulu-Nimule Road",
+          scheduled_datetime: `${today}T10:00`,
+          confirmation_status: "Confirmed",
+          responsible_party: "CNG Deal Desk",
+        },
+        leg1_supplier_to_handoff: {
+          carrier_name: "Northern Hauliers Uganda",
+          driver_contact: "+256 772 100 200",
+          scheduled_dispatch: `${today}T08:00`,
+          actual_dispatch: `${today}T08:30`,
+          expected_intake_kg: 30000,
+          actual_intake_kg: 30000,
+          evidence_reference: "WB-IN-001",
+          status: "Completed",
+        },
+        leg2_handoff_to_buyer: {
+          carrier_name: "Swift Grain Logistics",
+          driver_contact: "+256 782 300 400",
+          scheduled_collection: `${today}T14:00`,
+          actual_collection: `${today}T14:15`,
+          collected_kg: 30000,
+          delivered_kg: 30000,
+          evidence_reference: "WB-OUT-001",
+          status: "Delivered",
+        },
+        events: [],
+        quantity_reconciliation: {
+          expected_kg: 30000,
+          intake_kg: 30000,
+          collection_kg: 30000,
+          delivered_kg: 30000,
+          variance_kg: 0,
+          variance_pct: 0,
+          has_discrepancy: false,
+        },
       },
       payment_terms: {
         agreed_price_per_kg: 1100,
@@ -502,9 +551,11 @@ export default function TransactionModule() {
     };
   };
 
-  // Save current record directly to Supabase database (with 5-state tracking & offline resilience)
+  // Save current record directly to Supabase database (with synchronous in-flight guard, reconciliation & 5-state tracking)
   const handleSaveDraft = async () => {
     if (!selectedTx) return;
+    if (inFlightRef.current) return;
+    inFlightRef.current = true;
     setIsSubmitting(true);
     setSaveState({ status: "saving", timestamp: new Date(), error: null });
     try {
@@ -517,6 +568,25 @@ export default function TransactionModule() {
         status: selectedTx.status === "Approved" ? "Approved" : "Draft",
         sync_status: "pending_sync",
       };
+
+      // Reconcile uncertain network timeout: check if already committed
+      try {
+        const { data: existing } = await supabase
+          .from("transactions")
+          .select("*")
+          .eq("client_id", recordToSave.client_id)
+          .maybeSingle();
+        if (existing && existing.id && existing.sync_version >= (recordToSave.sync_version || 0)) {
+          setSelectedTx(existing);
+          setSaveState({ status: "saved_server", timestamp: new Date(existing.updated_at || Date.now()), error: null });
+          clearFormDraft(recordToSave.client_id);
+          showToast("Reconciled confirmed transaction record from Supabase database.", "success");
+          await refreshData();
+          return;
+        }
+      } catch (checkErr) {
+        console.warn("Pre-save reconciliation query note:", checkErr);
+      }
 
       try {
         // Direct write to Supabase database
@@ -539,28 +609,50 @@ export default function TransactionModule() {
       setSaveState({ status: "save_failed", timestamp: new Date(), error: err.message });
       showToast(`Error saving draft: ${err.message}`, "error");
     } finally {
+      inFlightRef.current = false;
       setIsSubmitting(false);
     }
   };
 
-  // Submit Deal Pack for Clarence Review
+  // Submit Deal Pack for Clarence Review (with strict incomplete commercial terms defense & in-flight guard)
   const handleSubmitForReview = async () => {
     if (!selectedTx) return;
+    if (inFlightRef.current) return;
 
-    // Validate 7 sections
+    // Strict Validation: Unknown costs and unconfirmed terms must be visibly incomplete (Phase 5 & Test D)
     const missing = [];
-    if (!selectedTx.buyer_requirements?.buyer_name) missing.push("Section 1: Buyer Name");
-    if (!selectedTx.supplier_verification?.supplier_name) missing.push("Section 2: Supplier Name");
-    if (Number(selectedTx.supplier_verification?.moisture_reading_pct) <= 0) missing.push("Section 2: Moisture reading");
-    if (!selectedTx.transport_collection?.transporter_name) missing.push("Section 3: Transporter");
-    if (Number(selectedTx.payment_terms?.agreed_price_per_kg) <= 0) missing.push("Section 4: Agreed price");
-    if (Number(selectedTx.fee_margin?.expected_gross_fee) <= 0) missing.push("Section 5: CNG Fee");
+    if (!selectedTx.buyer_requirements?.buyer_name) missing.push("Section 1: Buyer Name / Institution");
+    if (!selectedTx.supplier_verification?.supplier_name) missing.push("Section 2: Supplier / Cooperative Name");
+    if (Number(selectedTx.buyer_requirements?.required_tonnes) <= 0) missing.push("Section 1: Quantity in Kilograms / Tonnes");
+    
+    // Check price per kg
+    const priceVal = selectedTx.payment_terms?.agreed_price_per_kg;
+    if (priceVal === null || priceVal === undefined || Number(priceVal) <= 0) {
+      missing.push("Section 4: Price per kilo (UGX) [Must be positive number]");
+    }
+    
+    // Check payment terms
+    if (!selectedTx.payment_terms?.payment_schedule) {
+      missing.push("Section 4: Payment Schedule Terms");
+    }
+
+    // Check transport cost (must not be unentered/missing)
+    const transportVal = selectedTx.transport_collection?.total_transport_cost;
+    if (transportVal === null || transportVal === undefined) {
+      missing.push("Section 3: Transport Cost [Provide amount or explicitly confirm 0]");
+    }
+
+    // Check CNG fee margin
+    if (Number(selectedTx.fee_margin?.expected_gross_fee) <= 0) {
+      missing.push("Section 5: CNG Service Fee");
+    }
 
     if (missing.length > 0) {
-      showToast(`Cannot submit: Please complete required elements:\n${missing.join(", ")}`, "error");
+      showToast(`Cannot submit Deal Pack — Missing Mandatory Requirements:\n${missing.join("\n")}`, "error");
       return;
     }
 
+    inFlightRef.current = true;
     setIsSubmitting(true);
     setSaveState({ status: "saving", timestamp: new Date(), error: null });
     try {
@@ -594,17 +686,19 @@ export default function TransactionModule() {
       setSaveState({ status: "save_failed", timestamp: new Date(), error: err.message });
       showToast(`Submission error: ${err.message}`, "error");
     } finally {
+      inFlightRef.current = false;
       setIsSubmitting(false);
     }
   };
 
-  // Clarence Approval Action (Restricted to Admin / Clarence)
-  const handleApprovalAction = async (decision) => {
+  // Clarence Approval Action (Restricted to Admin / Clarence with in-flight guard)
+  const handleApprovalAction = async (decision, rejectionReason = "") => {
     if (!isAdmin) {
       showToast("PERMISSION DENIED: Only Clarence or an authorized administrator can approve or reject records.", "error");
       return;
     }
-
+    if (inFlightRef.current) return;
+    inFlightRef.current = true;
     setIsSubmitting(true);
     try {
       const now = new Date().toISOString();
@@ -617,6 +711,7 @@ export default function TransactionModule() {
           approver_id: currentUser?.id || "clarence_admin",
           approver_name: currentUser?.name || "Clarence (Managing Director)",
           decision_date: now,
+          rejection_reason: rejectionReason || selectedTx.approval?.rejection_reason || "",
         },
         sync_status: "pending_sync",
       };
@@ -636,6 +731,7 @@ export default function TransactionModule() {
     } catch (err) {
       showToast(`Approval error: ${err.message}`, "error");
     } finally {
+      inFlightRef.current = false;
       setIsSubmitting(false);
     }
   };
@@ -668,6 +764,291 @@ export default function TransactionModule() {
     if (tx.decision_matrix?.total_score > 0) count++;
     if (tx.approval?.status === "Approved") count++;
     return count;
+  };
+
+  // Phase 6: Three-Line Commercial Quotation & Pricing Helper
+  const renderThreeLineQuotation = (tx) => {
+    if (!tx) return null;
+    const commodity = tx.commodity || "Maize";
+    const tonnes = Number(tx.buyer_requirements?.required_tonnes || tx.supplier_verification?.confirmed_tonnes || 0);
+    const kg = tonnes * 1000;
+    const agreedPricePerKg = Number(tx.payment_terms?.agreed_price_per_kg || 0);
+    const totalCommodityValue = Math.round(kg * agreedPricePerKg);
+    const buyerName = tx.buyer_requirements?.buyer_name || "Pending Buyer";
+    const supplierName = tx.supplier_verification?.supplier_name || "Pending Supplier";
+
+    // Line 2: CNG Service Fees
+    const feeRate = Number(tx.fee_margin?.cng_fee_per_tonne || 30000);
+    const minFee = Number(tx.fee_margin?.minimum_fee || 25000);
+    const proposedFee = Math.max(Math.round(tonnes * feeRate), minFee);
+    const feeStatus = tx.fee_margin?.acceptance_status || (tx.status === "Approved" ? "Accepted" : "Proposed");
+    const isFeeAccepted = feeStatus === "Accepted";
+    const acceptedFee = isFeeAccepted ? proposedFee : 0;
+
+    // Line 3: Third-Party Transport Costs
+    const transportCost = Number(tx.transport_collection?.total_transport_cost || 0);
+    const transportPayer = tx.transport_collection?.arrangement === "Self-collection" ? buyerName : "CNG / Deducted from settlement";
+    const carrierName = tx.transport_collection?.transporter_name || "Third-party Haulier";
+    const transportConfirmed = Boolean(transportCost > 0 && tx.transport_collection?.transporter_name);
+
+    // Total Commercial Due & Outstanding
+    const totalCommercialDue = totalCommodityValue + proposedFee + transportCost;
+    const depositPaid = Number(tx.payment_terms?.deposit_amount || 0);
+    const outstandingBalance = Math.max(0, totalCommercialDue - depositPaid);
+
+    return jsxs("div", {
+      className: "p-5 rounded-2xl border-2 border-emerald-500/30 bg-white dark:bg-slate-900 shadow-md space-y-4",
+      children: [
+        jsxs("div", {
+          className: "flex items-center justify-between border-b border-slate-100 dark:border-slate-800 pb-3",
+          children: [
+            jsxs("div", {
+              className: "flex items-center gap-2",
+              children: [
+                jsx("span", { className: "text-xl", children: "📜" }),
+                jsxs("div", {
+                  children: [
+                    jsx("h4", { className: "font-bold text-sm text-slate-900 dark:text-slate-100 uppercase tracking-wide", children: "Three-Line Commercial Quotation Breakdown" }),
+                    jsx("p", { className: "text-[11px] text-slate-500", children: "Standardized commercial quotation categories, payer/recipient allocations, and settlement obligations." }),
+                  ],
+                }),
+              ],
+            }),
+            jsx("span", { className: "font-mono font-bold text-xs px-2.5 py-1 rounded-full bg-emerald-50 text-emerald-800 border border-emerald-200 dark:bg-emerald-950/60 dark:text-emerald-300", children: "UGX Currency Standard" }),
+          ],
+        }),
+
+        // Line 1: Commodity Value
+        jsxs("div", {
+          className: "p-3.5 rounded-xl bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700/60 space-y-2",
+          children: [
+            jsxs("div", {
+              className: "flex items-center justify-between flex-wrap gap-2",
+              children: [
+                jsxs("div", {
+                  className: "flex items-center gap-2",
+                  children: [
+                    jsx("span", { className: "w-5 h-5 rounded-full bg-emerald-600 text-white flex items-center justify-center font-bold text-xs", children: "1" }),
+                    jsx("span", { className: "font-bold text-xs text-slate-900 dark:text-slate-100", children: "Line 1: Commodity Value" }),
+                    jsx("span", { className: "text-[11px] text-slate-500", children: `(${commodity} • ${tonnes} MT / ${kg.toLocaleString()} KG)` }),
+                  ],
+                }),
+                jsx("div", { className: "font-black text-sm text-emerald-700 dark:text-emerald-400 font-mono", children: `UGX ${totalCommodityValue.toLocaleString()}` }),
+              ],
+            }),
+            jsxs("div", {
+              className: "grid grid-cols-2 sm:grid-cols-4 gap-2 text-[11px] pt-1 text-slate-600 dark:text-slate-300 border-t border-slate-200/60 dark:border-slate-700/40",
+              children: [
+                jsxs("div", { children: [jsx("span", { className: "text-slate-400", children: "Unit Price: " }), jsx("strong", { children: `UGX ${agreedPricePerKg.toLocaleString()}/kg` })] }),
+                jsxs("div", { children: [jsx("span", { className: "text-slate-400", children: "Volume: " }), jsx("strong", { children: `${kg.toLocaleString()} kg (${tonnes} t)` })] }),
+                jsxs("div", { children: [jsx("span", { className: "text-slate-400", children: "Payer: " }), jsx("strong", { children: buyerName })] }),
+                jsxs("div", { children: [jsx("span", { className: "text-slate-400", children: "Recipient: " }), jsx("strong", { children: `${supplierName} (Escrow)` })] }),
+              ],
+            }),
+          ],
+        }),
+
+        // Line 2: CNG Service Fees
+        jsxs("div", {
+          className: "p-3.5 rounded-xl bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700/60 space-y-2",
+          children: [
+            jsxs("div", {
+              className: "flex items-center justify-between flex-wrap gap-2",
+              children: [
+                jsxs("div", {
+                  className: "flex items-center gap-2",
+                  children: [
+                    jsx("span", { className: "w-5 h-5 rounded-full bg-blue-600 text-white flex items-center justify-center font-bold text-xs", children: "2" }),
+                    jsx("span", { className: "font-bold text-xs text-slate-900 dark:text-slate-100", children: "Line 2: CNG Service Fees" }),
+                    jsx("span", { className: cn("text-[10px] px-2 py-0.5 rounded font-bold uppercase", isFeeAccepted ? "bg-emerald-100 text-emerald-800 dark:bg-emerald-950/60 dark:text-emerald-300" : "bg-amber-100 text-amber-800 dark:bg-amber-950/60 dark:text-amber-300"), children: `Status: ${feeStatus}` }),
+                  ],
+                }),
+                jsxs("div", {
+                  className: "text-right font-mono",
+                  children: [
+                    jsx("div", { className: "font-black text-sm text-blue-700 dark:text-blue-400", children: `UGX ${proposedFee.toLocaleString()}` }),
+                    !isFeeAccepted && jsx("div", { className: "text-[10px] text-amber-600 dark:text-amber-400 font-sans font-medium", children: "Unaccepted: UGX 0 earned" }),
+                  ],
+                }),
+              ],
+            }),
+            jsxs("div", {
+              className: "grid grid-cols-2 sm:grid-cols-4 gap-2 text-[11px] pt-1 text-slate-600 dark:text-slate-300 border-t border-slate-200/60 dark:border-slate-700/40",
+              children: [
+                jsxs("div", { children: [jsx("span", { className: "text-slate-400", children: "Fee Basis: " }), jsx("strong", { children: `${tonnes} t @ UGX ${feeRate.toLocaleString()}/t` })] }),
+                jsxs("div", { children: [jsx("span", { className: "text-slate-400", children: "Accepted Fee: " }), jsx("strong", { children: `UGX ${acceptedFee.toLocaleString()}` })] }),
+                jsxs("div", { children: [jsx("span", { className: "text-slate-400", children: "Payer: " }), jsx("strong", { children: buyerName })] }),
+                jsxs("div", { children: [jsx("span", { className: "text-slate-400", children: "Recipient: " }), jsx("strong", { children: "Clarity Natural Goods" })] }),
+              ],
+            }),
+          ],
+        }),
+
+        // Line 3: Third-Party Costs (Transport)
+        jsxs("div", {
+          className: "p-3.5 rounded-xl bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700/60 space-y-2",
+          children: [
+            jsxs("div", {
+              className: "flex items-center justify-between flex-wrap gap-2",
+              children: [
+                jsxs("div", {
+                  className: "flex items-center gap-2",
+                  children: [
+                    jsx("span", { className: "w-5 h-5 rounded-full bg-purple-600 text-white flex items-center justify-center font-bold text-xs", children: "3" }),
+                    jsx("span", { className: "font-bold text-xs text-slate-900 dark:text-slate-100", children: "Line 3: Third-Party Costs (Transport)" }),
+                    jsx("span", { className: cn("text-[10px] px-2 py-0.5 rounded font-bold uppercase", transportConfirmed ? "bg-emerald-100 text-emerald-800" : "bg-slate-200 text-slate-700"), children: transportConfirmed ? "Confirmed" : "Estimated" }),
+                  ],
+                }),
+                jsx("div", { className: "font-black text-sm text-purple-700 dark:text-purple-400 font-mono", children: `UGX ${transportCost.toLocaleString()}` }),
+              ],
+            }),
+            jsxs("div", {
+              className: "grid grid-cols-2 sm:grid-cols-4 gap-2 text-[11px] pt-1 text-slate-600 dark:text-slate-300 border-t border-slate-200/60 dark:border-slate-700/40",
+              children: [
+                jsxs("div", { children: [jsx("span", { className: "text-slate-400", children: "Carrier: " }), jsx("strong", { children: carrierName })] }),
+                jsxs("div", { children: [jsx("span", { className: "text-slate-400", children: "Route: " }), jsx("strong", { children: `${tx.transport_collection?.collection_point || "Hub"} → ${tx.transport_collection?.destination || "Destination"}` })] }),
+                jsxs("div", { children: [jsx("span", { className: "text-slate-400", children: "Payer: " }), jsx("strong", { children: transportPayer })] }),
+                jsxs("div", { children: [jsx("span", { className: "text-slate-400", children: "Recipient: " }), jsx("strong", { children: carrierName })] }),
+              ],
+            }),
+          ],
+        }),
+
+        // Payment Responsibility Summary Banner
+        jsxs("div", {
+          className: "p-4 rounded-xl bg-slate-900 text-white dark:bg-slate-950 flex flex-col sm:flex-row items-center justify-between gap-3 shadow-inner",
+          children: [
+            jsxs("div", {
+              className: "space-y-1 text-center sm:text-left",
+              children: [
+                jsx("div", { className: "text-[11px] text-slate-400 font-medium uppercase tracking-wider", children: "Total Commercial Deal Value" }),
+                jsx("div", { className: "text-xl font-black font-mono text-white", children: `UGX ${totalCommercialDue.toLocaleString()}` }),
+              ],
+            }),
+            jsxs("div", {
+              className: "flex items-center gap-4 text-xs font-mono",
+              children: [
+                jsxs("div", {
+                  className: "text-right",
+                  children: [
+                    jsx("div", { className: "text-[10px] text-slate-400", children: "Confirmed / Due" }),
+                    jsx("div", { className: "font-bold text-emerald-400", children: `UGX ${(totalCommodityValue + acceptedFee + transportCost).toLocaleString()}` }),
+                  ],
+                }),
+                jsxs("div", {
+                  className: "text-right",
+                  children: [
+                    jsx("div", { className: "text-[10px] text-slate-400", children: "Outstanding Balance" }),
+                    jsx("div", { className: "font-bold text-amber-400", children: `UGX ${outstandingBalance.toLocaleString()}` }),
+                  ],
+                }),
+              ],
+            }),
+          ],
+        }),
+      ],
+    });
+  };
+
+  // Phase 7: Operational Event Handlers for Supplier Intake & Buyer Collection
+  const handleLogIntakeEvent = (intakeKg, evidenceRef, notes) => {
+    const today = new Date().toISOString();
+    const event = {
+      id: `ev_intake_${Date.now()}`,
+      event_type: "SUPPLIER_INTAKE",
+      actor: currentUser?.name || currentUser?.email || "Field Officer",
+      timestamp: today,
+      quantity_kg: Number(intakeKg) || 0,
+      unit: "KG",
+      status: "COMPLETED",
+      notes: notes || "Supplier intake confirmed on site.",
+      evidence: evidenceRef || "WEIGHBRIDGE-TKT",
+    };
+
+    const existingEvents = selectedTx.transport_collection?.events || [];
+    const updatedEvents = [...existingEvents, event];
+
+    const expectedKg = (selectedTx.buyer_requirements?.required_tonnes || 0) * 1000;
+    const currentIntake = Number(intakeKg) || 0;
+    const deliveredKg = selectedTx.transport_collection?.quantity_reconciliation?.delivered_kg || 0;
+    const varianceKg = currentIntake - expectedKg;
+    const variancePct = expectedKg > 0 ? (varianceKg / expectedKg) * 100 : 0;
+
+    const updatedTx = {
+      ...selectedTx,
+      transport_collection: {
+        ...selectedTx.transport_collection,
+        leg1_supplier_to_handoff: {
+          ...selectedTx.transport_collection?.leg1_supplier_to_handoff,
+          actual_intake_kg: currentIntake,
+          intake_status: "CONFIRMED",
+          intake_officer: currentUser?.name || "Field Officer",
+          evidence_reference: evidenceRef || "",
+        },
+        events: updatedEvents,
+        quantity_reconciliation: {
+          expected_kg: expectedKg,
+          intake_kg: currentIntake,
+          collection_kg: currentIntake,
+          delivered_kg: deliveredKg,
+          variance_kg: varianceKg,
+          variance_pct: Math.round(variancePct * 100) / 100,
+          has_discrepancy: Math.abs(varianceKg) > 0,
+        },
+      },
+    };
+    setSelectedTx(updatedTx);
+    showToast(`Supplier intake event recorded: ${currentIntake.toLocaleString()} kg confirmed.`, "success");
+  };
+
+  const handleLogCollectionEvent = (deliveredKg, evidenceRef, notes) => {
+    const today = new Date().toISOString();
+    const event = {
+      id: `ev_collection_${Date.now()}`,
+      event_type: "BUYER_COLLECTION",
+      actor: currentUser?.name || currentUser?.email || "Logistics Officer",
+      timestamp: today,
+      quantity_kg: Number(deliveredKg) || 0,
+      unit: "KG",
+      status: "COMPLETED",
+      notes: notes || "Buyer collection and destination delivery confirmed.",
+      evidence: evidenceRef || "WAYBILL-OUT",
+    };
+
+    const existingEvents = selectedTx.transport_collection?.events || [];
+    const updatedEvents = [...existingEvents, event];
+
+    const expectedKg = (selectedTx.buyer_requirements?.required_tonnes || 0) * 1000;
+    const intakeKg = selectedTx.transport_collection?.quantity_reconciliation?.intake_kg || expectedKg;
+    const currentDelivered = Number(deliveredKg) || 0;
+    const varianceKg = currentDelivered - intakeKg;
+    const variancePct = intakeKg > 0 ? (varianceKg / intakeKg) * 100 : 0;
+
+    const updatedTx = {
+      ...selectedTx,
+      transport_collection: {
+        ...selectedTx.transport_collection,
+        leg2_handoff_to_buyer: {
+          ...selectedTx.transport_collection?.leg2_handoff_to_buyer,
+          delivered_kg: currentDelivered,
+          delivery_status: "DELIVERED",
+          receiving_officer: currentUser?.name || "Logistics Officer",
+          evidence_reference: evidenceRef || "",
+        },
+        events: updatedEvents,
+        quantity_reconciliation: {
+          expected_kg: expectedKg,
+          intake_kg: intakeKg,
+          collection_kg: intakeKg,
+          delivered_kg: currentDelivered,
+          variance_kg: varianceKg,
+          variance_pct: Math.round(variancePct * 100) / 100,
+          has_discrepancy: Math.abs(varianceKg) > 0,
+        },
+      },
+    };
+    setSelectedTx(updatedTx);
+    showToast(`Buyer collection event recorded: ${currentDelivered.toLocaleString()} kg delivered.`, "success");
   };
 
   // Wave 4: 5-State Last-Saved Indicator Helper
@@ -1877,125 +2258,648 @@ export default function TransactionModule() {
                       });
 
 
-                    // SECTION 03: TRANSPORT / COLLECTION
-                    case 3:
+                    // SECTION 03: TRANSPORT / COLLECTION — PHYSICAL HANDOFF & TWO TRANSPORT LEGS
+                    case 3: {
+                      const tc = selectedTx.transport_collection || {};
+                      const handoff = tc.handoff_location || {};
+                      const leg1 = tc.leg1_supplier_to_handoff || {};
+                      const leg2 = tc.leg2_handoff_to_buyer || {};
+                      const events = tc.events || [];
+                      const recon = tc.quantity_reconciliation || {
+                        expected_kg: (selectedTx.buyer_requirements?.required_tonnes || 0) * 1000,
+                        intake_kg: leg1.actual_intake_kg || 0,
+                        delivered_kg: leg2.delivered_kg || 0,
+                        variance_kg: (leg2.delivered_kg || 0) - ((selectedTx.buyer_requirements?.required_tonnes || 0) * 1000),
+                        has_discrepancy: false,
+                      };
+
                       return jsxs("div", {
-                        className: "space-y-5",
+                        className: "space-y-6",
                         children: [
                           jsxs("div", {
                             className: "border-b border-slate-100 dark:border-slate-800 pb-3",
                             children: [
-                              jsx("h3", { className: "text-base font-bold text-slate-900 dark:text-slate-100", children: "Element 03 — Transport & Collection" }),
-                              jsx("p", { className: "text-xs text-slate-600 dark:text-slate-300 mt-0.5", children: "Capture collection arrangement, transporter identity, collection point, destination, and costs." }),
+                              jsx("h3", { className: "text-base font-bold text-slate-900 dark:text-slate-100", children: "Element 03 — Physical Handoff, Two Transport Legs & Reconciliation" }),
+                              jsx("p", { className: "text-xs text-slate-600 dark:text-slate-300 mt-0.5", children: "Two-leg transport architecture, nominated physical handoff hub, separate intake & collection events, and discrepancy tracking." }),
                             ],
                           }),
+
+                          // SUB-CARD 1: NOMINATED PHYSICAL HANDOFF LOCATION
                           jsxs("div", {
-                            className: "grid grid-cols-1 md:grid-cols-2 gap-4 text-xs",
+                            className: "p-4 rounded-xl border border-blue-200 dark:border-blue-900/60 bg-blue-50/40 dark:bg-blue-950/20 space-y-3",
                             children: [
-                              jsxs("label", {
-                                className: "space-y-1 font-semibold",
+                              jsxs("div", {
+                                className: "flex items-center justify-between",
                                 children: [
-                                  jsx("span", { children: "Transport Arrangement *" }),
-                                  jsx("select", {
-                                    value: selectedTx.transport_collection.arrangement,
-                                    onChange: (e) =>
-                                      setSelectedTx({
-                                        ...selectedTx,
-                                        transport_collection: { ...selectedTx.transport_collection, arrangement: e.target.value },
-                                      }),
-                                    className: "w-full p-2.5 rounded-lg border border-slate-300 dark:border-slate-700 bg-transparent font-normal",
+                                  jsxs("div", {
+                                    className: "flex items-center gap-2",
                                     children: [
-                                      jsx("option", { value: "Company-arranged", children: "Company-arranged (Deal Desk coordinates transport)" }),
-                                      jsx("option", { value: "Self-collection", children: "Self-collection (Buyer collects from bulking point)" }),
-                                      jsx("option", { value: "Supplier-delivered", children: "Supplier-delivered (Delivered direct to buyer)" }),
+                                      jsx("span", { className: "text-base", children: "📍" }),
+                                      jsx("h4", { className: "text-xs font-bold uppercase tracking-wider text-blue-900 dark:text-blue-200", children: "Proposed Physical Handoff Location (Leg 1 → Leg 2 Node)" }),
+                                    ],
+                                  }),
+                                  jsx("span", {
+                                    className: cn(
+                                      "text-[10px] font-bold px-2 py-0.5 rounded-full uppercase",
+                                      handoff.confirmation_status === "Confirmed" ? "bg-emerald-100 text-emerald-800 dark:bg-emerald-950/60 dark:text-emerald-300" : "bg-amber-100 text-amber-800"
+                                    ),
+                                    children: handoff.confirmation_status || "Proposed",
+                                  }),
+                                ],
+                              }),
+                              jsxs("div", {
+                                className: "grid grid-cols-1 md:grid-cols-3 gap-3 text-xs",
+                                children: [
+                                  jsxs("label", {
+                                    className: "space-y-1 font-semibold",
+                                    children: [
+                                      jsx("span", { children: "Hub / Bulking Facility Name *" }),
+                                      jsx("input", {
+                                        type: "text",
+                                        value: handoff.hub_name || "",
+                                        onChange: (e) =>
+                                          setSelectedTx({
+                                            ...selectedTx,
+                                            transport_collection: {
+                                              ...tc,
+                                              handoff_location: { ...handoff, hub_name: e.target.value },
+                                            },
+                                          }),
+                                        placeholder: "e.g. Amuru Central Bulking Hub",
+                                        className: "w-full p-2.5 rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 font-normal",
+                                      }),
+                                    ],
+                                  }),
+                                  jsxs("label", {
+                                    className: "space-y-1 font-semibold",
+                                    children: [
+                                      jsx("span", { children: "District" }),
+                                      jsx("select", {
+                                        value: handoff.district || "Amuru",
+                                        onChange: (e) =>
+                                          setSelectedTx({
+                                            ...selectedTx,
+                                            transport_collection: {
+                                              ...tc,
+                                              handoff_location: { ...handoff, district: e.target.value },
+                                            },
+                                          }),
+                                        className: "w-full p-2.5 rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 font-normal",
+                                        children: DISTRICTS.map((d) => jsx("option", { value: d, children: d }, d)),
+                                      }),
+                                    ],
+                                  }),
+                                  jsxs("label", {
+                                    className: "space-y-1 font-semibold",
+                                    children: [
+                                      jsx("span", { children: "Physical Reference / Landmark" }),
+                                      jsx("input", {
+                                        type: "text",
+                                        value: handoff.physical_reference || "",
+                                        onChange: (e) =>
+                                          setSelectedTx({
+                                            ...selectedTx,
+                                            transport_collection: {
+                                              ...tc,
+                                              handoff_location: { ...handoff, physical_reference: e.target.value },
+                                            },
+                                          }),
+                                        placeholder: "e.g. Plot 14, Gulu-Nimule Road",
+                                        className: "w-full p-2.5 rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 font-normal",
+                                      }),
+                                    ],
+                                  }),
+                                  jsxs("label", {
+                                    className: "space-y-1 font-semibold",
+                                    children: [
+                                      jsx("span", { children: "Scheduled Date & Time" }),
+                                      jsx("input", {
+                                        type: "datetime-local",
+                                        value: handoff.scheduled_datetime || "",
+                                        onChange: (e) =>
+                                          setSelectedTx({
+                                            ...selectedTx,
+                                            transport_collection: {
+                                              ...tc,
+                                              handoff_location: { ...handoff, scheduled_datetime: e.target.value },
+                                            },
+                                          }),
+                                        className: "w-full p-2.5 rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 font-normal",
+                                      }),
+                                    ],
+                                  }),
+                                  jsxs("label", {
+                                    className: "space-y-1 font-semibold",
+                                    children: [
+                                      jsx("span", { children: "Confirmation Status" }),
+                                      jsx("select", {
+                                        value: handoff.confirmation_status || "Proposed",
+                                        onChange: (e) =>
+                                          setSelectedTx({
+                                            ...selectedTx,
+                                            transport_collection: {
+                                              ...tc,
+                                              handoff_location: { ...handoff, confirmation_status: e.target.value },
+                                            },
+                                          }),
+                                        className: "w-full p-2.5 rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 font-normal",
+                                        children: [
+                                          jsx("option", { value: "Proposed", children: "Proposed (Pending Agreement)" }),
+                                          jsx("option", { value: "Confirmed", children: "Confirmed (Both Parties Agreed)" }),
+                                          jsx("option", { value: "Rejected", children: "Rejected / Renegotiate Node" }),
+                                        ],
+                                      }),
+                                    ],
+                                  }),
+                                  jsxs("label", {
+                                    className: "space-y-1 font-semibold",
+                                    children: [
+                                      jsx("span", { children: "Responsible Party" }),
+                                      jsx("input", {
+                                        type: "text",
+                                        value: handoff.responsible_party || "CNG Deal Desk",
+                                        onChange: (e) =>
+                                          setSelectedTx({
+                                            ...selectedTx,
+                                            transport_collection: {
+                                              ...tc,
+                                              handoff_location: { ...handoff, responsible_party: e.target.value },
+                                            },
+                                          }),
+                                        className: "w-full p-2.5 rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 font-normal",
+                                      }),
                                     ],
                                   }),
                                 ],
                               }),
-                              jsxs("label", {
-                                className: "space-y-1 font-semibold",
+                            ],
+                          }),
+
+                          // SUB-CARD 2 & 3: TWO SEPARATE TRANSPORT LEGS
+                          jsxs("div", {
+                            className: "grid grid-cols-1 lg:grid-cols-2 gap-4",
+                            children: [
+                              // LEG 1: SUPPLIER TO HANDOFF
+                              jsxs("div", {
+                                className: "p-4 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50/60 dark:bg-slate-800/40 space-y-3",
                                 children: [
-                                  jsx("span", { children: "Responsible Transporter *" }),
-                                  jsx("input", {
-                                    type: "text",
-                                    value: selectedTx.transport_collection.transporter_name,
-                                    onChange: (e) =>
-                                      setSelectedTx({
-                                        ...selectedTx,
-                                        transport_collection: { ...selectedTx.transport_collection, transporter_name: e.target.value },
-                                      }),
-                                    placeholder: "e.g. Northern Hauliers Uganda",
-                                    className: "w-full p-2.5 rounded-lg border border-slate-300 dark:border-slate-700 bg-transparent font-normal",
-                                  }),
-                                ],
-                              }),
-                              jsxs("label", {
-                                className: "space-y-1 font-semibold",
-                                children: [
-                                  jsx("span", { children: "Collection Point" }),
-                                  jsx("input", {
-                                    type: "text",
-                                    value: selectedTx.transport_collection.collection_point,
-                                    onChange: (e) =>
-                                      setSelectedTx({
-                                        ...selectedTx,
-                                        transport_collection: { ...selectedTx.transport_collection, collection_point: e.target.value },
-                                      }),
-                                    placeholder: "e.g. Amuru Central Bulking Facility",
-                                    className: "w-full p-2.5 rounded-lg border border-slate-300 dark:border-slate-700 bg-transparent font-normal",
-                                  }),
-                                ],
-                              }),
-                              jsxs("label", {
-                                className: "space-y-1 font-semibold",
-                                children: [
-                                  jsx("span", { children: "Destination" }),
-                                  jsx("input", {
-                                    type: "text",
-                                    value: selectedTx.transport_collection.destination,
-                                    onChange: (e) =>
-                                      setSelectedTx({
-                                        ...selectedTx,
-                                        transport_collection: { ...selectedTx.transport_collection, destination: e.target.value },
-                                      }),
-                                    placeholder: "e.g. Gulu Grain Millers Silo #2",
-                                    className: "w-full p-2.5 rounded-lg border border-slate-300 dark:border-slate-700 bg-transparent font-normal",
-                                  }),
-                                ],
-                              }),
-                              jsxs("label", {
-                                className: "space-y-1 font-semibold",
-                                children: [
-                                  jsx("span", { children: "Total Transport Cost (UGX)" }),
-                                  jsx("input", {
-                                    type: "number",
-                                    value: selectedTx.transport_collection.total_transport_cost,
-                                    onChange: (e) =>
-                                      setSelectedTx({
-                                        ...selectedTx,
-                                        transport_collection: { ...selectedTx.transport_collection, total_transport_cost: Number(e.target.value) },
-                                      }),
-                                    className: "w-full p-2.5 rounded-lg border border-slate-300 dark:border-slate-700 bg-transparent font-normal",
-                                  }),
-                                ],
-                              }),
-                              jsxs("label", {
-                                className: "space-y-1 font-semibold",
-                                children: [
-                                  jsx("span", { children: "Collection Status" }),
-                                  jsx("select", {
-                                    value: selectedTx.transport_collection.collection_status,
-                                    onChange: (e) =>
-                                      setSelectedTx({
-                                        ...selectedTx,
-                                        transport_collection: { ...selectedTx.transport_collection, collection_status: e.target.value },
-                                      }),
-                                    className: "w-full p-2.5 rounded-lg border border-slate-300 dark:border-slate-700 bg-transparent font-normal",
+                                  jsxs("div", {
+                                    className: "flex items-center justify-between border-b border-slate-200 dark:border-slate-700 pb-2",
                                     children: [
-                                      jsx("option", { value: "Planned", children: "Planned" }),
-                                      jsx("option", { value: "In transit", children: "In transit" }),
-                                      jsx("option", { value: "Delivered", children: "Delivered" }),
-                                      jsx("option", { value: "Weighed at destination", children: "Weighed at destination" }),
+                                      jsxs("div", {
+                                        className: "flex items-center gap-2",
+                                        children: [
+                                          jsx("span", { className: "w-5 h-5 rounded-full bg-emerald-600 text-white flex items-center justify-center font-bold text-[10px]", children: "L1" }),
+                                          jsx("h4", { className: "text-xs font-bold uppercase tracking-wider text-slate-900 dark:text-slate-100", children: "Transport Leg 1: Supplier → Handoff" }),
+                                        ],
+                                      }),
+                                      jsx("span", { className: "text-[10px] font-bold px-2 py-0.5 rounded bg-slate-200 dark:bg-slate-700 text-slate-800 dark:text-slate-200", children: leg1.status || "Planned" }),
+                                    ],
+                                  }),
+                                  jsxs("div", {
+                                    className: "grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs",
+                                    children: [
+                                      jsxs("label", {
+                                        className: "space-y-1 font-semibold",
+                                        children: [
+                                          jsx("span", { children: "Haulier / Carrier Name *" }),
+                                          jsx("input", {
+                                            type: "text",
+                                            value: leg1.carrier_name || tc.transporter_name || "",
+                                            onChange: (e) =>
+                                              setSelectedTx({
+                                                ...selectedTx,
+                                                transport_collection: {
+                                                  ...tc,
+                                                  transporter_name: e.target.value,
+                                                  leg1_supplier_to_handoff: { ...leg1, carrier_name: e.target.value },
+                                                },
+                                              }),
+                                            placeholder: "e.g. Northern Hauliers",
+                                            className: "w-full p-2 rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 font-normal",
+                                          }),
+                                        ],
+                                      }),
+                                      jsxs("label", {
+                                        className: "space-y-1 font-semibold",
+                                        children: [
+                                          jsx("span", { children: "Driver Contact" }),
+                                          jsx("input", {
+                                            type: "text",
+                                            value: leg1.driver_contact || tc.transporter_contact || "",
+                                            onChange: (e) =>
+                                              setSelectedTx({
+                                                ...selectedTx,
+                                                transport_collection: {
+                                                  ...tc,
+                                                  leg1_supplier_to_handoff: { ...leg1, driver_contact: e.target.value },
+                                                },
+                                              }),
+                                            placeholder: "+256 772 000 000",
+                                            className: "w-full p-2 rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 font-normal",
+                                          }),
+                                        ],
+                                      }),
+                                      jsxs("label", {
+                                        className: "space-y-1 font-semibold",
+                                        children: [
+                                          jsx("span", { children: "Scheduled Dispatch" }),
+                                          jsx("input", {
+                                            type: "datetime-local",
+                                            value: leg1.scheduled_dispatch || "",
+                                            onChange: (e) =>
+                                              setSelectedTx({
+                                                ...selectedTx,
+                                                transport_collection: {
+                                                  ...tc,
+                                                  leg1_supplier_to_handoff: { ...leg1, scheduled_dispatch: e.target.value },
+                                                },
+                                              }),
+                                            className: "w-full p-2 rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 font-normal",
+                                          }),
+                                        ],
+                                      }),
+                                      jsxs("label", {
+                                        className: "space-y-1 font-semibold",
+                                        children: [
+                                          jsx("span", { children: "Intake Ticket / Weighbridge Ref" }),
+                                          jsx("input", {
+                                            type: "text",
+                                            value: leg1.evidence_reference || "",
+                                            onChange: (e) =>
+                                              setSelectedTx({
+                                                ...selectedTx,
+                                                transport_collection: {
+                                                  ...tc,
+                                                  leg1_supplier_to_handoff: { ...leg1, evidence_reference: e.target.value },
+                                                },
+                                              }),
+                                            placeholder: "WB-IN-1002",
+                                            className: "w-full p-2 rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 font-normal",
+                                          }),
+                                        ],
+                                      }),
+                                    ],
+                                  }),
+                                ],
+                              }),
+
+                              // LEG 2: HANDOFF TO BUYER
+                              jsxs("div", {
+                                className: "p-4 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50/60 dark:bg-slate-800/40 space-y-3",
+                                children: [
+                                  jsxs("div", {
+                                    className: "flex items-center justify-between border-b border-slate-200 dark:border-slate-700 pb-2",
+                                    children: [
+                                      jsxs("div", {
+                                        className: "flex items-center gap-2",
+                                        children: [
+                                          jsx("span", { className: "w-5 h-5 rounded-full bg-blue-600 text-white flex items-center justify-center font-bold text-[10px]", children: "L2" }),
+                                          jsx("h4", { className: "text-xs font-bold uppercase tracking-wider text-slate-900 dark:text-slate-100", children: "Transport Leg 2: Handoff → Buyer" }),
+                                        ],
+                                      }),
+                                      jsx("span", { className: "text-[10px] font-bold px-2 py-0.5 rounded bg-slate-200 dark:bg-slate-700 text-slate-800 dark:text-slate-200", children: leg2.status || "Planned" }),
+                                    ],
+                                  }),
+                                  jsxs("div", {
+                                    className: "grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs",
+                                    children: [
+                                      jsxs("label", {
+                                        className: "space-y-1 font-semibold",
+                                        children: [
+                                          jsx("span", { children: "Carrier / Logistics Service *" }),
+                                          jsx("input", {
+                                            type: "text",
+                                            value: leg2.carrier_name || "",
+                                            onChange: (e) =>
+                                              setSelectedTx({
+                                                ...selectedTx,
+                                                transport_collection: {
+                                                  ...tc,
+                                                  leg2_handoff_to_buyer: { ...leg2, carrier_name: e.target.value },
+                                                },
+                                              }),
+                                            placeholder: "e.g. Swift Grain Logistics",
+                                            className: "w-full p-2 rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 font-normal",
+                                          }),
+                                        ],
+                                      }),
+                                      jsxs("label", {
+                                        className: "space-y-1 font-semibold",
+                                        children: [
+                                          jsx("span", { children: "Driver Contact" }),
+                                          jsx("input", {
+                                            type: "text",
+                                            value: leg2.driver_contact || "",
+                                            onChange: (e) =>
+                                              setSelectedTx({
+                                                ...selectedTx,
+                                                transport_collection: {
+                                                  ...tc,
+                                                  leg2_handoff_to_buyer: { ...leg2, driver_contact: e.target.value },
+                                                },
+                                              }),
+                                            placeholder: "+256 782 000 000",
+                                            className: "w-full p-2 rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 font-normal",
+                                          }),
+                                        ],
+                                      }),
+                                      jsxs("label", {
+                                        className: "space-y-1 font-semibold",
+                                        children: [
+                                          jsx("span", { children: "Scheduled Collection" }),
+                                          jsx("input", {
+                                            type: "datetime-local",
+                                            value: leg2.scheduled_collection || "",
+                                            onChange: (e) =>
+                                              setSelectedTx({
+                                                ...selectedTx,
+                                                transport_collection: {
+                                                  ...tc,
+                                                  leg2_handoff_to_buyer: { ...leg2, scheduled_collection: e.target.value },
+                                                },
+                                              }),
+                                            className: "w-full p-2 rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 font-normal",
+                                          }),
+                                        ],
+                                      }),
+                                      jsxs("label", {
+                                        className: "space-y-1 font-semibold",
+                                        children: [
+                                          jsx("span", { children: "Buyer Delivery Note / Release Ref" }),
+                                          jsx("input", {
+                                            type: "text",
+                                            value: leg2.evidence_reference || "",
+                                            onChange: (e) =>
+                                              setSelectedTx({
+                                                ...selectedTx,
+                                                transport_collection: {
+                                                  ...tc,
+                                                  leg2_handoff_to_buyer: { ...leg2, evidence_reference: e.target.value },
+                                                },
+                                              }),
+                                            placeholder: "WB-OUT-5001",
+                                            className: "w-full p-2 rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 font-normal",
+                                          }),
+                                        ],
+                                      }),
+                                    ],
+                                  }),
+                                ],
+                              }),
+                            ],
+                          }),
+
+                          // SUB-CARD 4: OPERATIONAL EVENTS LEDGER (Intake & Collection Segregated)
+                          jsxs("div", {
+                            className: "p-4 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 space-y-4 shadow-sm",
+                            children: [
+                              jsxs("div", {
+                                className: "flex items-center justify-between border-b border-slate-100 dark:border-slate-800 pb-2",
+                                children: [
+                                  jsxs("div", {
+                                    children: [
+                                      jsx("h4", { className: "text-xs font-bold uppercase tracking-wider text-slate-900 dark:text-slate-100", children: "Operational Event Ledger (Intake & Collection Segregation)" }),
+                                      jsx("p", { className: "text-[11px] text-slate-500", children: "Supplier intake and buyer collection events are stored independently and never overwrite each other." }),
+                                    ],
+                                  }),
+                                  jsx("span", { className: "text-xs font-mono font-bold text-slate-400", children: `${events.length} Logged Events` }),
+                                ],
+                              }),
+
+                              // Fast Logging Action Form
+                              jsxs("div", {
+                                className: "grid grid-cols-1 md:grid-cols-2 gap-4 pt-1",
+                                children: [
+                                  // Quick Log Intake
+                                  jsxs("div", {
+                                    className: "p-3 rounded-lg border border-emerald-200 dark:border-emerald-900/60 bg-emerald-50/30 dark:bg-emerald-950/20 space-y-2 text-xs",
+                                    children: [
+                                      jsx("div", { className: "font-bold text-emerald-800 dark:text-emerald-300", children: "+ Record Supplier Intake Event (Leg 1)" }),
+                                      jsxs("div", {
+                                        className: "grid grid-cols-2 gap-2",
+                                        children: [
+                                          jsx("input", {
+                                            type: "number",
+                                            placeholder: "Intake kg (e.g. 30000)",
+                                            value: intakeInputKg,
+                                            onChange: (e) => setIntakeInputKg(e.target.value),
+                                            className: "p-2 rounded border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900",
+                                          }),
+                                          jsx("input", {
+                                            type: "text",
+                                            placeholder: "Weighbridge Ref",
+                                            value: intakeInputRef,
+                                            onChange: (e) => setIntakeInputRef(e.target.value),
+                                            className: "p-2 rounded border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900",
+                                          }),
+                                        ],
+                                      }),
+                                      jsx("input", {
+                                        type: "text",
+                                        placeholder: "Inspection notes / moisture reading",
+                                        value: intakeInputNotes,
+                                        onChange: (e) => setIntakeInputNotes(e.target.value),
+                                        className: "w-full p-2 rounded border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900",
+                                      }),
+                                      jsx("button", {
+                                        type: "button",
+                                        onClick: () => {
+                                          if (!intakeInputKg) {
+                                            showToast("Please enter verified intake weight in KG", "error");
+                                            return;
+                                          }
+                                          handleLogIntakeEvent(intakeInputKg, intakeInputRef, intakeInputNotes);
+                                          setIntakeInputKg("");
+                                          setIntakeInputRef("");
+                                          setIntakeInputNotes("");
+                                        },
+                                        className: "w-full py-1.5 px-3 rounded-lg bg-emerald-700 hover:bg-emerald-800 text-white font-bold text-xs shadow-sm",
+                                        children: "Log Supplier Intake Event",
+                                      }),
+                                    ],
+                                  }),
+
+                                  // Quick Log Buyer Collection
+                                  jsxs("div", {
+                                    className: "p-3 rounded-lg border border-blue-200 dark:border-blue-900/60 bg-blue-50/30 dark:bg-blue-950/20 space-y-2 text-xs",
+                                    children: [
+                                      jsx("div", { className: "font-bold text-blue-800 dark:text-blue-300", children: "+ Record Buyer Collection Event (Leg 2)" }),
+                                      jsxs("div", {
+                                        className: "grid grid-cols-2 gap-2",
+                                        children: [
+                                          jsx("input", {
+                                            type: "number",
+                                            placeholder: "Delivered kg (e.g. 30000)",
+                                            value: collectionInputKg,
+                                            onChange: (e) => setCollectionInputKg(e.target.value),
+                                            className: "p-2 rounded border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900",
+                                          }),
+                                          jsx("input", {
+                                            type: "text",
+                                            placeholder: "Waybill / Delivery Ref",
+                                            value: collectionInputRef,
+                                            onChange: (e) => setCollectionInputRef(e.target.value),
+                                            className: "p-2 rounded border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900",
+                                          }),
+                                        ],
+                                      }),
+                                      jsx("input", {
+                                        type: "text",
+                                        placeholder: "Buyer acceptance notes / receiving officer",
+                                        value: collectionInputNotes,
+                                        onChange: (e) => setCollectionInputNotes(e.target.value),
+                                        className: "w-full p-2 rounded border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900",
+                                      }),
+                                      jsx("button", {
+                                        type: "button",
+                                        onClick: () => {
+                                          if (!collectionInputKg) {
+                                            showToast("Please enter verified delivered weight in KG", "error");
+                                            return;
+                                          }
+                                          handleLogCollectionEvent(collectionInputKg, collectionInputRef, collectionInputNotes);
+                                          setCollectionInputKg("");
+                                          setCollectionInputRef("");
+                                          setCollectionInputNotes("");
+                                        },
+                                        className: "w-full py-1.5 px-3 rounded-lg bg-blue-700 hover:bg-blue-800 text-white font-bold text-xs shadow-sm",
+                                        children: "Log Buyer Collection Event",
+                                      }),
+                                    ],
+                                  }),
+                                ],
+                              }),
+
+                              // Events List / Table
+                              events.length > 0
+                                ? jsxs("div", {
+                                    className: "overflow-x-auto border border-slate-200 dark:border-slate-800 rounded-lg",
+                                    children: [
+                                      jsxs("table", {
+                                        className: "w-full text-[11px] text-left",
+                                        children: [
+                                          jsx("thead", {
+                                            className: "bg-slate-50 dark:bg-slate-800/80 text-slate-500 uppercase font-semibold",
+                                            children: [
+                                              jsxs("tr", {
+                                                children: [
+                                                  jsx("th", { className: "p-2", children: "Type" }),
+                                                  jsx("th", { className: "p-2", children: "Quantity" }),
+                                                  jsx("th", { className: "p-2", children: "Actor" }),
+                                                  jsx("th", { className: "p-2", children: "Evidence / Ref" }),
+                                                  jsx("th", { className: "p-2", children: "Timestamp" }),
+                                                  jsx("th", { className: "p-2", children: "Notes" }),
+                                                ],
+                                              }),
+                                            ],
+                                          }),
+                                          jsx("tbody", {
+                                            className: "divide-y divide-slate-100 dark:divide-slate-800",
+                                            children: events.map((ev, idx) =>
+                                              jsxs(
+                                                "tr",
+                                                {
+                                                  className: "hover:bg-slate-50 dark:hover:bg-slate-800/50",
+                                                  children: [
+                                                    jsx("td", {
+                                                      className: "p-2",
+                                                      children: jsx("span", {
+                                                        className: cn(
+                                                          "font-bold px-1.5 py-0.5 rounded text-[10px]",
+                                                          ev.event_type === "SUPPLIER_INTAKE"
+                                                            ? "bg-emerald-100 text-emerald-800 dark:bg-emerald-950/60 dark:text-emerald-300"
+                                                            : "bg-blue-100 text-blue-800 dark:bg-blue-950/60 dark:text-blue-300"
+                                                        ),
+                                                        children: ev.event_type,
+                                                      }),
+                                                    }),
+                                                    jsx("td", { className: "p-2 font-mono font-bold", children: `${(ev.quantity_kg || 0).toLocaleString()} KG` }),
+                                                    jsx("td", { className: "p-2", children: ev.actor }),
+                                                    jsx("td", { className: "p-2 font-mono text-[10px]", children: ev.evidence || "—" }),
+                                                    jsx("td", { className: "p-2 text-slate-400", children: new Date(ev.timestamp).toLocaleString() }),
+                                                    jsx("td", { className: "p-2 text-slate-600 dark:text-slate-300 max-w-xs truncate", children: ev.notes }),
+                                                  ],
+                                                },
+                                                ev.id || idx
+                                              )
+                                            ),
+                                          }),
+                                        ],
+                                      }),
+                                    ],
+                                  })
+                                : jsx("div", { className: "text-center py-4 text-xs text-slate-400 italic", children: "No operational intake or collection events recorded yet." }),
+                            ],
+                          }),
+
+                          // SUB-CARD 5: QUANTITY RECONCILIATION & DISCREPANCY TRACKING
+                          jsxs("div", {
+                            className: cn(
+                              "p-4 rounded-xl border-2 shadow-sm space-y-3",
+                              recon.has_discrepancy
+                                ? "border-amber-400/80 bg-amber-50/40 dark:bg-amber-950/20"
+                                : "border-emerald-500/30 bg-emerald-50/20 dark:bg-emerald-950/10"
+                            ),
+                            children: [
+                              jsxs("div", {
+                                className: "flex items-center justify-between",
+                                children: [
+                                  jsxs("div", {
+                                    className: "flex items-center gap-2",
+                                    children: [
+                                      jsx("span", { className: "text-lg", children: recon.has_discrepancy ? "⚠️" : "⚖️" }),
+                                      jsx("h4", { className: "text-xs font-bold uppercase tracking-wider text-slate-900 dark:text-slate-100", children: "Two-Leg Quantity Reconciliation" }),
+                                    ],
+                                  }),
+                                  jsx("span", {
+                                    className: cn(
+                                      "text-xs font-bold px-2.5 py-1 rounded-full",
+                                      recon.has_discrepancy
+                                        ? "bg-amber-500 text-white"
+                                        : "bg-emerald-600 text-white"
+                                    ),
+                                    children: recon.has_discrepancy
+                                      ? `Discrepancy: ${recon.variance_kg.toLocaleString()} KG (${recon.variance_pct}%)`
+                                      : "Reconciled — No Quantity Loss",
+                                  }),
+                                ],
+                              }),
+                              jsxs("div", {
+                                className: "grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs pt-1",
+                                children: [
+                                  jsxs("div", {
+                                    className: "p-2.5 rounded-lg bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800",
+                                    children: [
+                                      jsx("div", { className: "text-[10px] text-slate-400 font-medium", children: "Expected Contract KG" }),
+                                      jsx("div", { className: "text-sm font-black font-mono mt-0.5", children: `${(recon.expected_kg || 0).toLocaleString()} kg` }),
+                                    ],
+                                  }),
+                                  jsxs("div", {
+                                    className: "p-2.5 rounded-lg bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800",
+                                    children: [
+                                      jsx("div", { className: "text-[10px] text-slate-400 font-medium", children: "Leg 1 Actual Intake KG" }),
+                                      jsx("div", { className: "text-sm font-black font-mono text-emerald-600 dark:text-emerald-400 mt-0.5", children: `${(recon.intake_kg || leg1.actual_intake_kg || 0).toLocaleString()} kg` }),
+                                    ],
+                                  }),
+                                  jsxs("div", {
+                                    className: "p-2.5 rounded-lg bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800",
+                                    children: [
+                                      jsx("div", { className: "text-[10px] text-slate-400 font-medium", children: "Leg 2 Delivered KG" }),
+                                      jsx("div", { className: "text-sm font-black font-mono text-blue-600 dark:text-blue-400 mt-0.5", children: `${(recon.delivered_kg || leg2.delivered_kg || 0).toLocaleString()} kg` }),
+                                    ],
+                                  }),
+                                  jsxs("div", {
+                                    className: "p-2.5 rounded-lg bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800",
+                                    children: [
+                                      jsx("div", { className: "text-[10px] text-slate-400 font-medium", children: "Net Transport Variance" }),
+                                      jsx("div", {
+                                        className: cn(
+                                          "text-sm font-black font-mono mt-0.5",
+                                          (recon.variance_kg || 0) === 0 ? "text-emerald-600 dark:text-emerald-400" : "text-amber-600 dark:text-amber-400"
+                                        ),
+                                        children: `${(recon.variance_kg || 0).toLocaleString()} kg`,
+                                      }),
                                     ],
                                   }),
                                 ],
@@ -2004,9 +2908,9 @@ export default function TransactionModule() {
                           }),
                         ],
                       });
+                    }
 
-
-                    // SECTION 04: PAYMENT TERMS
+// SECTION 04: PAYMENT TERMS
                     case 4:
                       return jsxs("div", {
                         className: "space-y-5",
@@ -2137,8 +3041,9 @@ export default function TransactionModule() {
                     case 5: {
                       const econ = recalculateFeeAndMargin(selectedTx);
                       return jsxs("div", {
-                        className: "space-y-5",
+                        className: "space-y-6",
                         children: [
+                          renderThreeLineQuotation(selectedTx),
                           jsxs("div", {
                             className: "border-b border-slate-100 dark:border-slate-800 pb-3",
                             children: [
@@ -2394,91 +3299,126 @@ export default function TransactionModule() {
 
                     }
 
-                    // SECTION 07: CLARENCE APPROVAL STATUS (Server-Enforced Gate)
-                    case 7:
+                    // SECTION 07: SUBMIT & MANAGEMENT APPROVAL STATUS
+                    case 7: {
+                      const approvalStatus = selectedTx.approval?.status || selectedTx.status || "Draft";
+                      const approverName = selectedTx.approval?.approver_name || (approvalStatus === "Approved" ? "Clarence (Managing Director)" : "Clarence");
+                      const decisionDate = selectedTx.approval?.decision_date;
+                      const rejectionReason = selectedTx.approval?.rejection_reason || selectedTx.approval?.comments || "";
+
                       return jsxs("div", {
-                        className: "space-y-5",
+                        className: "space-y-6",
                         children: [
                           jsxs("div", {
                             className: "border-b border-slate-100 dark:border-slate-800 pb-3",
                             children: [
-                              jsx("h3", { className: "text-base font-bold text-slate-900 dark:text-slate-100", children: "Submit — Clarence Approval Status" }),
-                              jsx("p", { className: "text-xs text-slate-600 dark:text-slate-300 mt-0.5", children: "Only Clarence or an authorized delegated approver may approve transactions. Field officers cannot self-approve." }),
+                              jsx("h3", { className: "text-base font-bold text-slate-900 dark:text-slate-100", children: "Submit — Management Approval & Final Sign-Off" }),
+                              jsx("p", { className: "text-xs text-slate-600 dark:text-slate-300 mt-0.5", children: "Official Clarence sign-off gate, commercial quotation verification, and execution authorization." }),
                             ],
                           }),
 
-                          // Current Approval Badge
+                          // Three-Line Commercial Quotation Breakdown
+                          renderThreeLineQuotation(selectedTx),
+
+                          // Current Approval Badge Card
                           jsxs("div", {
-                            className: "p-4 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-800/40 flex items-center justify-between",
+                            className: "p-4 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-800/40 flex items-center justify-between flex-wrap gap-3",
                             children: [
                               jsxs("div", {
                                 children: [
-                                  jsx("div", { className: "text-xs text-slate-500", children: "Current Decision Status" }),
+                                  jsx("div", { className: "text-xs text-slate-500 font-medium", children: "Official Management Status" }),
                                   jsx("div", {
                                     className: cn(
-                                      "text-xl font-bold mt-0.5",
-                                      selectedTx.approval.status === "Approved"
+                                      "text-xl font-black mt-0.5 tracking-tight",
+                                      approvalStatus === "Approved"
                                         ? "text-emerald-700 dark:text-emerald-400"
-                                        : selectedTx.approval.status === "Rejected"
+                                        : approvalStatus === "Rejected"
                                         ? "text-rose-700 dark:text-rose-400"
+                                        : approvalStatus === "Returned for Correction"
+                                        ? "text-purple-700 dark:text-purple-400"
                                         : "text-amber-700 dark:text-amber-400"
                                     ),
-                                    children: selectedTx.approval.status,
+                                    children: approvalStatus,
                                   }),
                                 ],
                               }),
-                              selectedTx.approval.decision_date &&
+                              decisionDate &&
                                 jsxs("div", {
                                   className: "text-right text-xs text-slate-500",
                                   children: [
-                                    jsx("div", { children: `Approver: ${selectedTx.approval.approver_name || "Clarence"}` }),
-                                    jsx("div", { children: new Date(selectedTx.approval.decision_date).toLocaleString() }),
+                                    jsxs("div", { children: [jsx("span", { className: "font-semibold", children: "Approver: " }), approverName] }),
+                                    jsx("div", { children: new Date(decisionDate).toLocaleString() }),
                                   ],
                                 }),
                             ],
                           }),
 
+                          // Rejection / Correction reason notice if applicable
+                          rejectionReason &&
+                            jsxs("div", {
+                              className: "p-3.5 rounded-xl border border-rose-200 dark:border-rose-900/60 bg-rose-50/50 dark:bg-rose-950/20 text-xs space-y-1",
+                              children: [
+                                jsx("div", { className: "font-bold text-rose-800 dark:text-rose-300", children: "Management Feedback / Reason for Correction:" }),
+                                jsx("p", { className: "text-rose-700 dark:text-rose-400 whitespace-pre-wrap", children: rejectionReason }),
+                              ],
+                            }),
+
                           // Clarence Admin Controls VS Field Officer Notice
                           isAdmin
                             ? jsxs("div", {
-                                className: "space-y-4 p-4 rounded-xl border-2 border-emerald-500/40 bg-emerald-50/20 dark:bg-emerald-950/20",
+                                className: "space-y-4 p-5 rounded-2xl border-2 border-emerald-500/40 bg-emerald-50/20 dark:bg-emerald-950/20",
                                 children: [
                                   jsxs("div", {
                                     children: [
                                       jsx("span", { className: "text-xs font-bold uppercase tracking-wider text-emerald-800 dark:text-emerald-300", children: "Clarence Executive Authority Active" }),
-                                      jsx("p", { className: "text-xs text-slate-600 dark:text-slate-400 mt-0.5", children: "You are signed in with approval credentials. You may officially approve or reject this Deal Pack." }),
+                                      jsx("p", { className: "text-xs text-slate-600 dark:text-slate-400 mt-0.5", children: "You are signed in with executive sign-off authority. You may officially approve, reject, or return this Deal Pack for correction." }),
                                     ],
                                   }),
                                   jsxs("label", {
                                     className: "block space-y-1 text-xs font-semibold",
                                     children: [
-                                      jsx("span", { children: "Approver Comments & Execution Conditions" }),
+                                      jsx("span", { children: "Sign-Off Notes / Reason for Rejection or Correction" }),
                                       jsx("textarea", {
                                         rows: 2,
-                                        value: selectedTx.approval.comments,
-                                        onChange: (e) =>
-                                          setSelectedTx({
-                                            ...selectedTx,
-                                            approval: { ...selectedTx.approval, comments: e.target.value },
-                                          }),
-                                        placeholder: "e.g. Approved. Ensure weighbridge ticket is validated prior to releasing final tranche.",
+                                        value: rejectionReasonInput,
+                                        onChange: (e) => setRejectionReasonInput(e.target.value),
+                                        placeholder: "e.g. Approved. Verify weighbridge ticket WB-IN-001 prior to releasing final tranche.",
                                         className: "w-full p-2.5 rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 font-normal",
                                       }),
                                     ],
                                   }),
                                   jsxs("div", {
-                                    className: "flex items-center gap-3 pt-2",
+                                    className: "flex items-center gap-3 pt-2 flex-wrap",
                                     children: [
                                       jsx("button", {
                                         type: "button",
-                                        onClick: () => handleApprovalAction("Approved"),
+                                        onClick: () => handleApprovalAction("Approved", rejectionReasonInput),
                                         disabled: isSubmitting,
                                         className: "px-5 py-2.5 text-xs font-bold rounded-xl bg-emerald-700 hover:bg-emerald-800 text-white shadow-md transition-all",
                                         children: "✓ Approve Deal Pack",
                                       }),
                                       jsx("button", {
                                         type: "button",
-                                        onClick: () => handleApprovalAction("Rejected"),
+                                        onClick: () => {
+                                          if (!rejectionReasonInput.trim()) {
+                                            showToast("Please provide correction instructions before returning.", "error");
+                                            return;
+                                          }
+                                          handleApprovalAction("Returned for Correction", rejectionReasonInput);
+                                        },
+                                        disabled: isSubmitting,
+                                        className: "px-5 py-2.5 text-xs font-bold rounded-xl bg-purple-700 hover:bg-purple-800 text-white shadow-md transition-all",
+                                        children: "↩ Return for Correction",
+                                      }),
+                                      jsx("button", {
+                                        type: "button",
+                                        onClick: () => {
+                                          if (!rejectionReasonInput.trim()) {
+                                            showToast("Please provide rejection reason before rejecting.", "error");
+                                            return;
+                                          }
+                                          handleApprovalAction("Rejected", rejectionReasonInput);
+                                        },
                                         disabled: isSubmitting,
                                         className: "px-5 py-2.5 text-xs font-bold rounded-xl bg-rose-700 hover:bg-rose-800 text-white shadow-md transition-all",
                                         children: "✗ Reject Deal Pack",
@@ -2488,15 +3428,22 @@ export default function TransactionModule() {
                                 ],
                               })
                             : jsxs("div", {
-                                className: "p-4 rounded-xl border border-amber-200 bg-amber-50/60 dark:bg-amber-950/20 text-xs space-y-2",
+                                className: "p-4 rounded-xl border border-amber-200 bg-amber-50/60 dark:bg-amber-950/20 text-xs space-y-3",
                                 children: [
-                                  jsx("div", { className: "font-bold text-amber-900 dark:text-amber-300", children: "Field Officer Mode — Approval Authority Restricted" }),
-                                  jsx("p", { className: "text-amber-800 dark:text-amber-400 leading-relaxed", children: "As a field officer, you can capture observations, readings, and complete all Deal Pack sections. Once complete, click 'Submit Deal Pack for Review' so Clarence can review and sign off." }),
+                                  jsx("div", { className: "font-bold text-amber-900 dark:text-amber-300", children: "Field Officer Mode — Ready for Clarence Review" }),
+                                  jsx("p", { className: "text-amber-800 dark:text-amber-400 leading-relaxed", children: "You have completed Deal Pack sections. Click 'Submit Deal Pack for Review' below to initiate official executive review." }),
+                                  jsx("button", {
+                                    type: "button",
+                                    onClick: handleSubmitForReview,
+                                    disabled: isSubmitting,
+                                    className: "px-5 py-2.5 text-xs font-bold rounded-xl bg-emerald-700 hover:bg-emerald-800 text-white shadow-md transition-all",
+                                    children: "Submit Deal Pack for Clarence Review",
+                                  }),
                                 ],
                               }),
                         ],
                       });
-
+                    }
 
                     default:
                       return null;

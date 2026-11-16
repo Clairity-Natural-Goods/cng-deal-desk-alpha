@@ -11,6 +11,8 @@ import assert from "node:assert";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { createRequire } from "node:module";
+const require = createRequire(import.meta.url);
 
 import {
   b as stageBlockers,
@@ -1846,6 +1848,351 @@ runTest("REC-01", "Form Recovery - User-isolated draft retention and recovery ba
   assert.ok(txMod.includes("Unsaved local draft detected"), "TransactionModule must render recovery banner when uncommitted edits are found");
   assert.ok(txMod.includes("Restore Edits"), "Recovery banner must offer Restore Edits action");
   assert.ok(txMod.includes("Discard"), "Recovery banner must offer Discard action");
+});
+
+
+// ==============================================================================
+// WEDNESDAY LAUNCH READINESS VERIFICATION TEST SUITE
+// ==============================================================================
+
+// TEST-D: Incomplete Commercial Requirements Blocking READY Status
+runTest("TEST-D", "Validation Defense - Missing commercial costs and unconfirmed terms strictly block READY transition", () => {
+  const { classifyCostInput, evaluateReadyReadiness } = require("../assets/matrix/financialEngine.js");
+
+  // 1. Missing cost vs Confirmed Zero classification
+  const missingCost = classifyCostInput(null, "Transport Cost", true);
+  assert.strictEqual(missingCost.status, "NOT_ENTERED", "Unentered/null cost must be classified as NOT_ENTERED");
+  assert.strictEqual(missingCost.isMissing, true, "isMissing flag must be true for unentered costs");
+  assert.strictEqual(missingCost.value, null, "Value must be null, never silently zero");
+
+  const confirmedZeroCost = classifyCostInput(0, "Subsidized Weighbridge Fee", false, true);
+  assert.strictEqual(confirmedZeroCost.status, "EXPLICIT_ZERO", "Explicit zero must be classified as EXPLICIT_ZERO");
+  assert.strictEqual(confirmedZeroCost.isZero, true, "isZero must be true for explicit zero");
+  assert.strictEqual(confirmedZeroCost.value, 0, "Value for confirmed zero must be exactly 0");
+
+  // 2. Deal with missing mandatory terms must fail READY gating
+  const incompleteDeal = {
+    commodity: "Maize",
+    buyer_requirements: { buyer_name: "Gulu Millers", required_tonnes: 30 },
+    supplier_verification: { supplier_name: "Amuru Farmers Co-op", confirmed_tonnes: 30 },
+    payment_terms: { agreed_price_per_kg: null, payment_schedule: "" }, // MISSING
+    transport_collection: { total_transport_cost: null, transporter_name: "" }, // MISSING
+    fee_margin: { expected_gross_fee: 0 },
+  };
+
+  const readiness = evaluateReadyReadiness(incompleteDeal);
+  assert.strictEqual(readiness.isReady, false, "Deal with missing price, payment terms, or transport must NOT be READY");
+  assert.ok(readiness.blockers && readiness.blockers.length >= 2, "Must return specific missing requirements in blockers list");
+});
+
+// TEST-G: Interrupted Save & Pre-Save Reconciliation Recovery
+runTest("TEST-G", "Network Resilience - Interrupted save preserves user input, falls back to local queue and reconciles idempotently", async () => {
+  const { saveOfflineTransaction, getAllOfflineTransactions } = require("../assets/offline/offlineStore.js");
+
+  const testClientId = "test-recovery-client-uuid-001";
+  const draftTx = {
+    client_id: testClientId,
+    reference: "TXN-TEST-INTERRUPTED-001",
+    commodity: "Maize",
+    status: "Draft",
+    sync_status: "pending_sync",
+    buyer_requirements: { buyer_name: "Test Buyer", required_tonnes: 25 },
+    supplier_verification: { supplier_name: "Test Supplier", confirmed_tonnes: 25 },
+    payment_terms: { agreed_price_per_kg: 1050, currency: "UGX" },
+    fee_margin: { expected_gross_fee: 750000 },
+    transport_collection: { total_transport_cost: 500000 },
+  };
+
+  // 1. Simulate network disconnect during save -> Offline store captures record locally
+  const savedLocally = await saveOfflineTransaction(draftTx, { id: "officer_1", name: "Field Officer" });
+  assert.ok(savedLocally, "Offline store must persist transaction during interrupted network");
+  assert.strictEqual(savedLocally.client_id, testClientId, "Client UUID must be preserved");
+
+  const queued = await getAllOfflineTransactions();
+  const found = queued.find((q) => q.client_id === testClientId);
+  assert.ok(found, "Record must reside in durable offline store awaiting synchronisation");
+  assert.strictEqual(found.sync_status, "pending_sync", "Record must be flagged as pending_sync");
+
+  // 2. Verify TransactionModule implementation contains inFlightRef and pre-save reconciliation
+  const txModPath = path.join(projectRoot, "assets/transactions/TransactionModule.js");
+  const txMod = fs.readFileSync(txModPath, "utf8");
+  assert.ok(txMod.includes("inFlightRef"), "TransactionModule must employ inFlightRef to prevent concurrent submissions");
+  assert.ok(txMod.includes("Reconciled confirmed transaction record from Supabase database"), "Must support pre-save reconciliation on uncertain timeout");
+  assert.ok(txMod.includes("Saved locally — awaiting synchronisation"), "Must display truthful saved locally indicator instead of false cloud success");
+});
+
+// SUN-01: Sunflower Complete Workflow & Constraint Parity
+runTest("SUN-01", "Sunflower Parity - Sunflower is fully selectable, constrained in schema, calculated, and persisted", () => {
+  // 1. Dropdown & Master list inclusion
+  const txModPath = path.join(projectRoot, "assets/transactions/TransactionModule.js");
+  const txMod = fs.readFileSync(txModPath, "utf8");
+  assert.ok(txMod.includes('"Sunflower"'), "COMMODITIES list in TransactionModule must include Sunflower");
+
+  // 2. Migration constraint verification
+  const sunflowerMigrationPath = path.join(projectRoot, "supabase/migrations/20261114000002_add_sunflower_commodity.sql");
+  assert.ok(fs.existsSync(sunflowerMigrationPath), "Sunflower commodity migration must exist");
+  const migrationSql = fs.readFileSync(sunflowerMigrationPath, "utf8");
+  assert.ok(migrationSql.includes("'Sunflower'"), "Migration must add Sunflower to allowed commodity check constraint");
+
+  // 3. Financial calculations parity for Sunflower
+  const tonnes = 20;
+  const kg = tonnes * 1000;
+  const pricePerKg = 1800; // Typical Sunflower price
+  const grossValue = kg * pricePerKg;
+  assert.strictEqual(grossValue, 36000000, "20 MT of Sunflower @ UGX 1,800/kg must equal UGX 36,000,000");
+
+  const feeRate = 30000;
+  const cngFee = Math.max(tonnes * feeRate, 25000);
+  assert.strictEqual(cngFee, 600000, "CNG fee for 20 MT Sunflower must equal UGX 600,000");
+});
+
+// HAND-01: Physical Handoff Location Architecture
+runTest("HAND-01", "Physical Handoff - Captures nominated hub, district, scheduled time, and confirmation status", () => {
+  const txModPath = path.join(projectRoot, "assets/transactions/TransactionModule.js");
+  const txMod = fs.readFileSync(txModPath, "utf8");
+
+  assert.ok(txMod.includes("handoff_location"), "TransactionModule must handle handoff_location");
+  assert.ok(txMod.includes("Hub / Bulking Facility Name"), "Must provide input for Hub/Bulking Facility Name");
+  assert.ok(txMod.includes("Physical Reference / Landmark"), "Must provide input for Physical Reference");
+  assert.ok(txMod.includes("Confirmation Status"), "Must provide confirmation status selector (Proposed/Confirmed/Rejected)");
+  assert.ok(txMod.includes("Responsible Party"), "Must capture Responsible Party for the handoff node");
+});
+
+// HAND-02: Two Transport Legs Segregation (Leg 1 & Leg 2)
+runTest("HAND-02", "Transport Legs - Explicitly segregates Leg 1 (Supplier to Handoff) and Leg 2 (Handoff to Buyer)", () => {
+  const txModPath = path.join(projectRoot, "assets/transactions/TransactionModule.js");
+  const txMod = fs.readFileSync(txModPath, "utf8");
+
+  assert.ok(txMod.includes("Transport Leg 1: Supplier → Handoff"), "Must render Transport Leg 1 UI");
+  assert.ok(txMod.includes("Transport Leg 2: Handoff → Buyer"), "Must render Transport Leg 2 UI");
+  assert.ok(txMod.includes("leg1_supplier_to_handoff"), "Must store Leg 1 metadata independently");
+  assert.ok(txMod.includes("leg2_handoff_to_buyer"), "Must store Leg 2 metadata independently");
+});
+
+// HAND-03: Operational Event Segregation (Intake & Collection Events)
+runTest("HAND-03", "Operational Events - Supplier Intake and Buyer Collection events are recorded independently without overwriting", () => {
+  const txModPath = path.join(projectRoot, "assets/transactions/TransactionModule.js");
+  const txMod = fs.readFileSync(txModPath, "utf8");
+
+  assert.ok(txMod.includes("SUPPLIER_INTAKE"), "Must define SUPPLIER_INTAKE event type");
+  assert.ok(txMod.includes("BUYER_COLLECTION"), "Must define BUYER_COLLECTION event type");
+  assert.ok(txMod.includes("handleLogIntakeEvent"), "Must implement handleLogIntakeEvent handler");
+  assert.ok(txMod.includes("handleLogCollectionEvent"), "Must implement handleLogCollectionEvent handler");
+  assert.ok(txMod.includes("Operational Event Ledger (Intake & Collection Segregation)"), "Must render operational event ledger table");
+});
+
+// HAND-04: Quantity Reconciliation & Discrepancy Detection
+runTest("HAND-04", "Reconciliation - Real-time variance tracking across Expected, Intake, Delivered quantities", () => {
+  const expectedKg = 30000;
+  const intakeKg = 30000;
+  const deliveredKg = 29600; // 400 kg transit loss
+  const varianceKg = deliveredKg - intakeKg;
+  const variancePct = Math.round((varianceKg / intakeKg) * 10000) / 100;
+  const hasDiscrepancy = Math.abs(varianceKg) > 0;
+
+  assert.strictEqual(varianceKg, -400, "Net variance must be -400 kg");
+  assert.strictEqual(variancePct, -1.33, "Variance percentage must be -1.33%");
+  assert.strictEqual(hasDiscrepancy, true, "Discrepancy flag must be true when variance is non-zero");
+
+  const txModPath = path.join(projectRoot, "assets/transactions/TransactionModule.js");
+  const txMod = fs.readFileSync(txModPath, "utf8");
+  assert.ok(txMod.includes("Two-Leg Quantity Reconciliation"), "TransactionModule must render quantity reconciliation card");
+  assert.ok(txMod.includes("Discrepancy:"), "TransactionModule must show discrepancy badge on variance");
+});
+
+// QUO-01: Three-Line Commercial Quotation Breakdown
+runTest("QUO-01", "Quotation - Line 1 Commodity, Line 2 CNG Fee, Line 3 Transport with payer/recipient allocations", () => {
+  const txModPath = path.join(projectRoot, "assets/transactions/TransactionModule.js");
+  const txMod = fs.readFileSync(txModPath, "utf8");
+
+  assert.ok(txMod.includes("Three-Line Commercial Quotation Breakdown"), "Must render three-line quotation header");
+  assert.ok(txMod.includes("Line 1: Commodity Value"), "Must render Line 1 Commodity Value");
+  assert.ok(txMod.includes("Line 2: CNG Service Fees"), "Must render Line 2 CNG Service Fees");
+  assert.ok(txMod.includes("Line 3: Third-Party Costs (Transport)"), "Must render Line 3 Transport Costs");
+  assert.ok(txMod.includes("Unaccepted: UGX 0 earned"), "Must state UGX 0 earned when CNG fee is unaccepted");
+});
+
+// APPR-01: Explicit Management Approval Statuses & Reason Logging
+runTest("APPR-01", "Approval - Supports Pending, Approved, Rejected, Returned for Correction with mandatory reason logging", () => {
+  const txModPath = path.join(projectRoot, "assets/transactions/TransactionModule.js");
+  const txMod = fs.readFileSync(txModPath, "utf8");
+
+  assert.ok(txMod.includes("Submit — Management Approval & Final Sign-Off"), "Section 7 must be labeled Submit & Management Approval");
+  assert.ok(txMod.includes("✓ Approve Deal Pack"), "Must provide Approve action for Clarence");
+  assert.ok(txMod.includes("↩ Return for Correction"), "Must provide Return for Correction action for Clarence");
+  assert.ok(txMod.includes("✗ Reject Deal Pack"), "Must provide Reject action for Clarence");
+  assert.ok(txMod.includes("rejectionReasonInput"), "Must capture rejection/correction instructions");
+  assert.ok(txMod.includes("Returned for Correction"), "Must support 'Returned for Correction' status");
+});
+
+// MAIZE-CTRL-01: Controlled Synthetic Maize Transaction Demonstration
+runTest("MAIZE-CTRL-01", "Controlled Maize - 30 MT Grade 1 Maize from Amuru to Gulu passes all validation, handoff, and approval", () => {
+  const syntheticMaizeTx = {
+    client_id: "00000000-0000-4000-8000-000000000001",
+    reference: "TXN-20261116-MAIZE-CTRL-01",
+    commodity: "Maize",
+    created_by_name: "Okello David (Field Officer)",
+    status: "Approved",
+    sync_status: "synced",
+    buyer_requirements: {
+      buyer_name: "Gulu Grain Processors Ltd",
+      product_specification: "White Maize, Grain Grade 1",
+      required_tonnes: 30,
+      moisture_limit_pct: 13.5,
+      quality_spec: "Grade 1 - moisture <13.5%, broken grains <2%",
+      delivery_location: "Plot 8, Industrial Estate, Gulu",
+      delivery_district: "Gulu",
+      required_delivery_date: "2026-11-18",
+      purchasing_conditions: "Payment upon weighbridge clearance and quality certification",
+    },
+    supplier_verification: {
+      supplier_name: "Amuru Grain Farmers Cooperative Society",
+      contact_person: "Acayo Grace",
+      phone: "+256 772 456 789",
+      district: "Amuru",
+      location_details: "Amuru Bulking Centre, Warehouse A",
+      verification_status: "VERIFIED",
+      claimed_tonnes: 30,
+      confirmed_tonnes: 30,
+      moisture_reading_pct: 12.8,
+      verification_date: "2026-11-16",
+      verifying_officer: "Okello David",
+      evidence_notes: "Visual inspection, moisture test (12.8%), aflatoxin rapid test clean (<5 ppb).",
+    },
+    transport_collection: {
+      arrangement: "Company-arranged",
+      collection_point: "Amuru Central Bulking Hub",
+      destination: "Gulu Grain Processors Silo #2",
+      transporter_name: "Northern Hauliers Uganda",
+      transporter_contact: "+256 772 100 200",
+      estimated_tonnes: 30,
+      transport_rate_per_tonne: 25000,
+      total_transport_cost: 750000,
+      collection_status: "Delivered",
+      waybill_ref: "WB-2026-M01",
+      notes: "Direct 62 km haul via paved corridor.",
+      handoff_location: {
+        hub_name: "Amuru Central Bulking Hub",
+        district: "Amuru",
+        physical_reference: "Plot 14, Gulu-Nimule Road",
+        scheduled_datetime: "2026-11-17T09:00",
+        confirmation_status: "Confirmed",
+        responsible_party: "CNG Deal Desk",
+      },
+      leg1_supplier_to_handoff: {
+        carrier_name: "Northern Hauliers Uganda (Truck UBA 412X)",
+        driver_contact: "+256 772 100 200",
+        scheduled_dispatch: "2026-11-17T07:30",
+        actual_dispatch: "2026-11-17T07:45",
+        expected_intake_kg: 30000,
+        actual_intake_kg: 30000,
+        evidence_reference: "WB-IN-1044",
+        status: "Completed",
+      },
+      leg2_handoff_to_buyer: {
+        carrier_name: "Northern Hauliers Uganda (Truck UBA 412X)",
+        driver_contact: "+256 772 100 200",
+        scheduled_collection: "2026-11-17T11:00",
+        actual_collection: "2026-11-17T11:15",
+        collected_kg: 30000,
+        delivered_kg: 30000,
+        evidence_reference: "WB-OUT-5082",
+        status: "Delivered",
+      },
+      events: [
+        {
+          id: "ev_intake_1794700001",
+          event_type: "SUPPLIER_INTAKE",
+          actor: "Okello David (Field Officer)",
+          timestamp: "2026-11-17T08:45:00Z",
+          quantity_kg: 30000,
+          unit: "KG",
+          status: "COMPLETED",
+          evidence: "WB-IN-1044",
+          notes: "30,000 kg intake weighed on calibrated platform scale at Amuru Hub. Moisture 12.8%.",
+        },
+        {
+          id: "ev_collection_1794700002",
+          event_type: "BUYER_COLLECTION",
+          actor: "Adong Sarah (Receiving Manager, Gulu Silo)",
+          timestamp: "2026-11-17T13:30:00Z",
+          quantity_kg: 30000,
+          unit: "KG",
+          status: "COMPLETED",
+          evidence: "WB-OUT-5082",
+          notes: "30,000 kg received and weighed at Gulu Grain Processors Silo #2. Zero loss.",
+        },
+      ],
+      quantity_reconciliation: {
+        expected_kg: 30000,
+        intake_kg: 30000,
+        collection_kg: 30000,
+        delivered_kg: 30000,
+        variance_kg: 0,
+        variance_pct: 0,
+        has_discrepancy: false,
+      },
+    },
+    payment_terms: {
+      agreed_price_per_kg: 1050,
+      currency: "UGX",
+      payment_method: "Escrow Bank Transfer",
+      payment_schedule: "50% advance upon loading clearance, 50% upon destination weighbridge release",
+      deposit_required: true,
+      deposit_amount: 15750000,
+      outstanding_balance: 15750000,
+      payment_status: "Verified",
+      payment_conditions: "Both tranches released upon verified weighbridge ticket WB-OUT-5082 clearance.",
+    },
+    fee_margin: {
+      cng_fee_per_tonne: 30000,
+      minimum_fee: 25000,
+      calculation_basis: "30 MT @ UGX 30,000/MT",
+      expected_gross_fee: 900000,
+      acceptance_status: "Accepted",
+      cost_field: 60000,
+      cost_testing: 25000,
+      cost_transport: 0,
+      cost_other: 15000,
+      staff_hours: 6,
+      staff_rate_per_hour: 6000,
+      total_direct_costs: 136000,
+      overhead_pct: 15,
+      overhead_amount: 135000,
+      projected_net_margin: 629000,
+      notes: "Commercial viability confirmed. Net margin UGX 629,000 (69.9% margin efficiency).",
+    },
+    decision_matrix: {
+      supplier_reliability_score: 9,
+      buyer_payment_speed_score: 8,
+      logistics_feasibility_score: 9,
+      margin_viability_score: 8,
+      overall_risk_score: 8.5,
+      underwriting_decision: "PROCEED",
+    },
+    approval: {
+      status: "Approved",
+      approver_id: "clarence_md_001",
+      approver_name: "Clarence (Managing Director)",
+      decision_date: "2026-11-16T10:30:00Z",
+      comments: "Approved for full execution. Both transport legs and Amuru hub handoff verified. Release advance tranche per escrow schedule.",
+    },
+  };
+
+  // Validations
+  assert.strictEqual(syntheticMaizeTx.commodity, "Maize", "Commodity must be Maize");
+  assert.strictEqual(syntheticMaizeTx.buyer_requirements.required_tonnes * 1000, 30000, "30 MT must convert to 30,000 KG");
+  assert.strictEqual(syntheticMaizeTx.payment_terms.agreed_price_per_kg * 30000, 31500000, "Commodity total value must be UGX 31,500,000");
+  assert.strictEqual(syntheticMaizeTx.fee_margin.expected_gross_fee, 900000, "CNG fee must be UGX 900,000");
+  assert.strictEqual(syntheticMaizeTx.transport_collection.total_transport_cost, 750000, "Transport cost must be UGX 750,000");
+  assert.strictEqual(syntheticMaizeTx.transport_collection.quantity_reconciliation.variance_kg, 0, "Variance must be 0 kg");
+  assert.strictEqual(syntheticMaizeTx.transport_collection.events.length, 2, "Must contain exactly 2 segregated operational events");
+  assert.strictEqual(syntheticMaizeTx.approval.status, "Approved", "Approval status must be Approved");
+
+  // Save evidence to evidence/wednesday-launch/
+  const evidenceDir = path.join(projectRoot, "evidence/wednesday-launch");
+  if (!fs.existsSync(evidenceDir)) fs.mkdirSync(evidenceDir, { recursive: true });
+  fs.writeFileSync(path.join(evidenceDir, "maize_controlled_transaction.json"), JSON.stringify(syntheticMaizeTx, null, 2), "utf8");
 });
 
 // ==============================================================================

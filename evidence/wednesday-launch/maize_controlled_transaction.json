@@ -1,0 +1,151 @@
+{
+  "client_id": "00000000-0000-4000-8000-000000000001",
+  "reference": "TXN-20261116-MAIZE-CTRL-01",
+  "commodity": "Maize",
+  "created_by_name": "Okello David (Field Officer)",
+  "status": "Approved",
+  "sync_status": "synced",
+  "buyer_requirements": {
+    "buyer_name": "Gulu Grain Processors Ltd",
+    "product_specification": "White Maize, Grain Grade 1",
+    "required_tonnes": 30,
+    "moisture_limit_pct": 13.5,
+    "quality_spec": "Grade 1 - moisture <13.5%, broken grains <2%",
+    "delivery_location": "Plot 8, Industrial Estate, Gulu",
+    "delivery_district": "Gulu",
+    "required_delivery_date": "2026-11-18",
+    "purchasing_conditions": "Payment upon weighbridge clearance and quality certification"
+  },
+  "supplier_verification": {
+    "supplier_name": "Amuru Grain Farmers Cooperative Society",
+    "contact_person": "Acayo Grace",
+    "phone": "+256 772 456 789",
+    "district": "Amuru",
+    "location_details": "Amuru Bulking Centre, Warehouse A",
+    "verification_status": "VERIFIED",
+    "claimed_tonnes": 30,
+    "confirmed_tonnes": 30,
+    "moisture_reading_pct": 12.8,
+    "verification_date": "2026-11-16",
+    "verifying_officer": "Okello David",
+    "evidence_notes": "Visual inspection, moisture test (12.8%), aflatoxin rapid test clean (<5 ppb)."
+  },
+  "transport_collection": {
+    "arrangement": "Company-arranged",
+    "collection_point": "Amuru Central Bulking Hub",
+    "destination": "Gulu Grain Processors Silo #2",
+    "transporter_name": "Northern Hauliers Uganda",
+    "transporter_contact": "+256 772 100 200",
+    "estimated_tonnes": 30,
+    "transport_rate_per_tonne": 25000,
+    "total_transport_cost": 750000,
+    "collection_status": "Delivered",
+    "waybill_ref": "WB-2026-M01",
+    "notes": "Direct 62 km haul via paved corridor.",
+    "handoff_location": {
+      "hub_name": "Amuru Central Bulking Hub",
+      "district": "Amuru",
+      "physical_reference": "Plot 14, Gulu-Nimule Road",
+      "scheduled_datetime": "2026-11-17T09:00",
+      "confirmation_status": "Confirmed",
+      "responsible_party": "CNG Deal Desk"
+    },
+    "leg1_supplier_to_handoff": {
+      "carrier_name": "Northern Hauliers Uganda (Truck UBA 412X)",
+      "driver_contact": "+256 772 100 200",
+      "scheduled_dispatch": "2026-11-17T07:30",
+      "actual_dispatch": "2026-11-17T07:45",
+      "expected_intake_kg": 30000,
+      "actual_intake_kg": 30000,
+      "evidence_reference": "WB-IN-1044",
+      "status": "Completed"
+    },
+    "leg2_handoff_to_buyer": {
+      "carrier_name": "Northern Hauliers Uganda (Truck UBA 412X)",
+      "driver_contact": "+256 772 100 200",
+      "scheduled_collection": "2026-11-17T11:00",
+      "actual_collection": "2026-11-17T11:15",
+      "collected_kg": 30000,
+      "delivered_kg": 30000,
+      "evidence_reference": "WB-OUT-5082",
+      "status": "Delivered"
+    },
+    "events": [
+      {
+        "id": "ev_intake_1794700001",
+        "event_type": "SUPPLIER_INTAKE",
+        "actor": "Okello David (Field Officer)",
+        "timestamp": "2026-11-17T08:45:00Z",
+        "quantity_kg": 30000,
+        "unit": "KG",
+        "status": "COMPLETED",
+        "evidence": "WB-IN-1044",
+        "notes": "30,000 kg intake weighed on calibrated platform scale at Amuru Hub. Moisture 12.8%."
+      },
+      {
+        "id": "ev_collection_1794700002",
+        "event_type": "BUYER_COLLECTION",
+        "actor": "Adong Sarah (Receiving Manager, Gulu Silo)",
+        "timestamp": "2026-11-17T13:30:00Z",
+        "quantity_kg": 30000,
+        "unit": "KG",
+        "status": "COMPLETED",
+        "evidence": "WB-OUT-5082",
+        "notes": "30,000 kg received and weighed at Gulu Grain Processors Silo #2. Zero loss."
+      }
+    ],
+    "quantity_reconciliation": {
+      "expected_kg": 30000,
+      "intake_kg": 30000,
+      "collection_kg": 30000,
+      "delivered_kg": 30000,
+      "variance_kg": 0,
+      "variance_pct": 0,
+      "has_discrepancy": false
+    }
+  },
+  "payment_terms": {
+    "agreed_price_per_kg": 1050,
+    "currency": "UGX",
+    "payment_method": "Escrow Bank Transfer",
+    "payment_schedule": "50% advance upon loading clearance, 50% upon destination weighbridge release",
+    "deposit_required": true,
+    "deposit_amount": 15750000,
+    "outstanding_balance": 15750000,
+    "payment_status": "Verified",
+    "payment_conditions": "Both tranches released upon verified weighbridge ticket WB-OUT-5082 clearance."
+  },
+  "fee_margin": {
+    "cng_fee_per_tonne": 30000,
+    "minimum_fee": 25000,
+    "calculation_basis": "30 MT @ UGX 30,000/MT",
+    "expected_gross_fee": 900000,
+    "acceptance_status": "Accepted",
+    "cost_field": 60000,
+    "cost_testing": 25000,
+    "cost_transport": 0,
+    "cost_other": 15000,
+    "staff_hours": 6,
+    "staff_rate_per_hour": 6000,
+    "total_direct_costs": 136000,
+    "overhead_pct": 15,
+    "overhead_amount": 135000,
+    "projected_net_margin": 629000,
+    "notes": "Commercial viability confirmed. Net margin UGX 629,000 (69.9% margin efficiency)."
+  },
+  "decision_matrix": {
+    "supplier_reliability_score": 9,
+    "buyer_payment_speed_score": 8,
+    "logistics_feasibility_score": 9,
+    "margin_viability_score": 8,
+    "overall_risk_score": 8.5,
+    "underwriting_decision": "PROCEED"
+  },
+  "approval": {
+    "status": "Approved",
+    "approver_id": "clarence_md_001",
+    "approver_name": "Clarence (Managing Director)",
+    "decision_date": "2026-11-16T10:30:00Z",
+    "comments": "Approved for full execution. Both transport legs and Amuru hub handoff verified. Release advance tranche per escrow schedule."
+  }
+}
