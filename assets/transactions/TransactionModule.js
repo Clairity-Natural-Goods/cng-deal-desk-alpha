@@ -33,7 +33,7 @@ import {
 
 const React = toESM(reactExport(), 1);
 const { useState, useEffect, useMemo, useCallback, useRef } = React;
-import { classifyCostInput, COST_STATUS, evaluateReadyReadiness } from "../matrix/financialEngine.js";
+import { classifyCostInput, COST_STATUS, evaluateReadyReadiness, evaluateTransactionReadiness } from "../matrix/financialEngine.js";
 const { jsx, jsxs } = jsxRuntime();
 
 // Master Commodities & Districts
@@ -209,7 +209,7 @@ export default function TransactionModule() {
           const item = {
             ...remote,
             status: remote.status || "Draft",
-            sync_status: remote.sync_status || (remote.status === "Draft" ? "pending_sync" : "synced"),
+            sync_status: remote.sync_status || "synced",
           };
           mergedMap.set(key, item);
           await markTransactionSynced(key, item);
@@ -240,11 +240,11 @@ export default function TransactionModule() {
       // 4. Compute authoritative dashboard stats directly from the merged dataset
       const calculatedStats = {
         total: mergedList.length,
-        pending_sync: mergedList.filter((t) => t.sync_status === "pending_sync" || (t.status === "Draft" && t.sync_status !== "synced")).length,
+        pending_sync: mergedList.filter((t) => t.sync_status === "pending_sync").length,
         sync_failed: mergedList.filter((t) => t.sync_status === "sync_failed").length,
-        synced: mergedList.filter((t) => t.sync_status === "synced" && t.status !== "Draft").length,
+        synced: mergedList.filter((t) => t.sync_status === "synced").length,
         drafts: mergedList.filter((t) => t.status === "Draft" || t.status === "FieldCaptured").length,
-        approved: mergedList.filter((t) => t.status === "Approved").length,
+        approved: mergedList.filter((t) => t.status === "Approved" && evaluateTransactionReadiness(t).isReady).length,
       };
 
       setStats(calculatedStats);
@@ -696,6 +696,14 @@ export default function TransactionModule() {
     if (!isAdmin) {
       showToast("PERMISSION DENIED: Only Clarence or an authorized administrator can approve or reject records.", "error");
       return;
+    }
+    // Frontend Blocker A Defense: Incomplete transactions cannot enter Approved
+    if (decision === "Approved") {
+      const readiness = evaluateTransactionReadiness(selectedTx);
+      if (!readiness.isReady) {
+        showToast(`Cannot approve Deal Pack — Missing Mandatory Requirements:\n${readiness.missing.join("\n")}`, "error");
+        return;
+      }
     }
     if (inFlightRef.current) return;
     inFlightRef.current = true;
@@ -1245,7 +1253,18 @@ export default function TransactionModule() {
   };
 
   // Render Status Badge
-  const renderStatusBadge = (status) => {
+  const renderStatusBadge = (status, tx = null) => {
+    // Frontend Blocker A Defense: Incomplete transactions cannot display as Approved or Ready
+    if (tx && (status === "Approved" || status === "Ready")) {
+      const readiness = evaluateTransactionReadiness(tx);
+      if (!readiness.isReady) {
+        return jsx("span", {
+          className: "inline-flex items-center px-2.5 py-0.5 rounded-full text-xs border tracking-wide bg-amber-50 text-amber-800 border-amber-300 dark:bg-amber-950/60 dark:text-amber-300 dark:border-amber-800 font-semibold",
+          title: `NOT READY: Missing ${readiness.missing.join(", ")}`,
+          children: `NOT READY (${readiness.missing.length} Missing)`,
+        });
+      }
+    }
     const map = {
       Draft: "bg-slate-100 text-slate-800 border-slate-300 dark:bg-slate-900 dark:text-slate-200 dark:border-slate-700",
       FieldCaptured: "bg-blue-50 text-blue-800 border-blue-300 dark:bg-blue-950/60 dark:text-blue-300 dark:border-blue-800",
@@ -1653,7 +1672,7 @@ export default function TransactionModule() {
                                         jsxs("div", {
                                           className: "flex flex-wrap sm:flex-col items-end gap-1 shrink-0 max-w-full",
                                           children: [
-                                            renderStatusBadge(tx.status),
+                                            renderStatusBadge(tx.status, tx),
                                             renderSyncBadge(tx.sync_status, tx.sync_error),
                                           ],
                                         }),
@@ -1829,7 +1848,7 @@ export default function TransactionModule() {
                                 className: "font-mono font-bold text-xs px-2 py-0.5 rounded bg-slate-100 dark:bg-slate-800 text-slate-800 dark:text-slate-200 border border-slate-300 dark:border-slate-700 shrink-0",
                                 children: selectedTx.reference,
                               }),
-                              renderStatusBadge(selectedTx.status),
+                              renderStatusBadge(selectedTx.status, selectedTx),
                               renderSyncBadge(selectedTx.sync_status, selectedTx.sync_error),
                               renderSaveStateIndicator(saveState),
                             ],

@@ -136,8 +136,8 @@ export function maskBankAccount(account) {
  * Check if a user's role permits disclosure for a given purpose.
  */
 export function getDisclosurePermission(user, purpose) {
-  if (!user || !user.role) return false;
-  const userRole = String(user.role).toLowerCase();
+  if (!user) return false;
+  const userRole = typeof user === "string" ? user.toLowerCase() : String(user.role || "").toLowerCase();
   const allowedRoles = DISCLOSURE_ROLE_MATRIX[purpose];
   if (!allowedRoles) return false;
   return allowedRoles.includes(userRole);
@@ -256,6 +256,9 @@ export function maskTransaction(tx, isAuthorized = false, purpose = null) {
       contact_phone: cloned.buyer_requirements.contact_phone
         ? maskPhoneNumber(cloned.buyer_requirements.contact_phone)
         : undefined,
+      phone: cloned.buyer_requirements.phone
+        ? maskPhoneNumber(cloned.buyer_requirements.phone)
+        : undefined,
       contact_email: cloned.buyer_requirements.contact_email
         ? maskEmailAddress(cloned.buyer_requirements.contact_email)
         : undefined,
@@ -273,6 +276,9 @@ export function maskTransaction(tx, isAuthorized = false, purpose = null) {
         : undefined,
       phone: cloned.supplier_verification.phone
         ? maskPhoneNumber(cloned.supplier_verification.phone)
+        : undefined,
+      contact_phone: cloned.supplier_verification.contact_phone
+        ? maskPhoneNumber(cloned.supplier_verification.contact_phone)
         : undefined,
       contact_phone: cloned.supplier_verification.contact_phone
         ? maskPhoneNumber(cloned.supplier_verification.contact_phone)
@@ -356,3 +362,33 @@ export async function recordDisclosureAudit(supabaseClient, { transactionId, req
 
   return { success: true };
 }
+
+/**
+ * Generate neutral pseudonyms for shared operational views
+ */
+export function generateNeutralBuyerCode(name, index = 1) {
+  if (!name) return `Buyer B${index}`;
+  let hash = 0;
+  for (let i = 0; i < name.length; i++) hash = (hash << 5) - hash + name.charCodeAt(i);
+  const num = Math.abs(hash % 9) + 1;
+  return `Buyer B${num}`;
+}
+
+export function generateNeutralSupplierCode(name, index = 1) {
+  if (!name) return `Supplier S${index}`;
+  let hash = 0;
+  for (let i = 0; i < name.length; i++) hash = (hash << 5) - hash + name.charCodeAt(i);
+  const num = Math.abs(hash % 9) + 1;
+  return `Supplier S${num}`;
+}
+
+export function generateNeutralDealCode(reference) {
+  if (!reference) return "Deal D001";
+  let hash = 0;
+  for (let i = 0; i < reference.length; i++) hash = (hash << 5) - hash + reference.charCodeAt(i);
+  const num = String(Math.abs(hash % 999) + 1).padStart(3, "0");
+  return `Deal D${num}`;
+}
+
+export const canDiscloseForPurpose = canUserRevealIdentity;
+export function sanitizeTransactionForExport(records) { return maskExportRecords(records); }

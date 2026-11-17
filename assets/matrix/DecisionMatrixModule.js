@@ -304,7 +304,7 @@ export default function DecisionMatrixModule() {
     }
 
     // Check READY status constraints if promoting to Approved/READY
-    if (targetStatus === "Approved" && !financialResult.readyReadiness.isReady && !formData.supervisory_approved) {
+    if (targetStatus === "Approved" && !financialResult.readyReadiness.isReady) {
       showToast(`Cannot approve: ${financialResult.readyReadiness.blockers[0]}`, "error");
       return;
     }
@@ -313,7 +313,7 @@ export default function DecisionMatrixModule() {
     setIsSaving(true);
 
     try {
-      const isReadyForExecution = financialResult.readyReadiness.isReady || targetStatus === "Approved";
+      const isReadyForExecution = financialResult.readyReadiness.isReady;
       const recordPayload = {
         client_id: formData.client_id || undefined,
         reference: formData.reference || generateMatrixReference(),
@@ -1548,7 +1548,7 @@ export default function DecisionMatrixModule() {
                           children: filteredRecords.map((r) => {
                             const isPositive = r.net_margin !== null && r.net_margin > 0;
                             const isNegative = r.net_margin !== null && r.net_margin < 0;
-                            const isReady = r.ready_status === "READY" || r.status === "Approved" || r.status === "Ready";
+                            const isReady = r.ready_status === "READY" && (!r.ready_blockers || r.ready_blockers.length === 0);
                             return jsxs(
                               "tr",
                               {

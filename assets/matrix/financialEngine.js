@@ -800,3 +800,70 @@ export function formatPercentage(pct) {
   const sign = pct > 0 ? "+" : "";
   return `${sign}${Number(pct).toFixed(2)}%`;
 }
+
+/**
+ * Evaluate Transaction Record Readiness (10-Point Mandatory Gate)
+ * Symmetrically checks all mandatory Deal Pack requirements.
+ */
+export function evaluateTransactionReadiness(tx = {}) {
+  const missing = [];
+  if (!tx || typeof tx !== "object") {
+    return { isReady: false, missing: ["No transaction record"] };
+  }
+
+  // 1. Mandatory Buyer Information & Volume
+  const buyerName = tx.buyer_requirements?.buyer_name?.trim();
+  if (!buyerName) {
+    missing.push("Buyer identity / institution name");
+  }
+  const tonnes = Number(tx.buyer_requirements?.required_tonnes || tx.supplier_verification?.confirmed_tonnes || 0);
+  if (tonnes <= 0) {
+    missing.push("Required commercial volume (kg / MT)");
+  }
+
+  // 2. Mandatory Supplier Information & Moisture Reading
+  const supplierName = tx.supplier_verification?.supplier_name?.trim();
+  if (!supplierName) {
+    missing.push("Supplier / cooperative name");
+  }
+  const moisture = Number(tx.supplier_verification?.moisture_reading_pct || 0);
+  if (moisture <= 0 || moisture > 15.0) {
+    missing.push("Moisture reading (verified between 0.1% and 15.0%)");
+  }
+
+  // 3. Mandatory Written CNG Fee & Fee Acceptance
+  const feeGross = Number(tx.fee_margin?.expected_gross_fee || 0);
+  const feeRate = Number(tx.fee_margin?.cng_fee_per_tonne || 0);
+  if (feeGross <= 0 && feeRate < 25000) {
+    missing.push("Written CNG service fee (minimum UGX 25,000 floor)");
+  }
+  const feeStatus = tx.fee_margin?.acceptance_status;
+  if (feeStatus !== "Accepted" && feeStatus !== "Confirmed") {
+    missing.push("Written fee acceptance confirmation");
+  }
+
+  // 4. Mandatory Transport Quotation & Transporter
+  const transportCost = tx.transport_collection?.total_transport_cost;
+  if (transportCost === null || transportCost === undefined || Number(transportCost) < 0) {
+    missing.push("Transport quotation (total cost in UGX or confirmed zero)");
+  }
+  const transporterName = tx.transport_collection?.transporter_name?.trim();
+  if (!transporterName) {
+    missing.push("Transport quotation (carrier / haulier identity)");
+  }
+
+  // 5. Mandatory Agreed Price & Payment Schedule
+  const pricePerKg = Number(tx.payment_terms?.agreed_price_per_kg || 0);
+  if (pricePerKg <= 0) {
+    missing.push("Agreed price per kilo (UGX)");
+  }
+  const schedule = tx.payment_terms?.payment_schedule?.trim();
+  if (!schedule) {
+    missing.push("Agreed payment schedule terms");
+  }
+
+  return {
+    isReady: missing.length === 0,
+    missing,
+  };
+}

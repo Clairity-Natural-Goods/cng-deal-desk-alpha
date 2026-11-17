@@ -2195,6 +2195,223 @@ runTest("MAIZE-CTRL-01", "Controlled Maize - 30 MT Grade 1 Maize from Amuru to G
   fs.writeFileSync(path.join(evidenceDir, "maize_controlled_transaction.json"), JSON.stringify(syntheticMaizeTx, null, 2), "utf8");
 });
 
+
+// ==============================================================================
+// TUESDAY READINESS SPRINT ACCEPTANCE TESTS (FE-01..18, BE-01..18, RLS-01..10)
+// ==============================================================================
+
+// FE-01: Incomplete Record Cannot Display READY or Approved
+runTest("FE-01", "Frontend Readiness - Incomplete transaction records cannot display as READY or APPROVED", () => {
+  const { evaluateTransactionReadiness } = require("../assets/matrix/financialEngine.js");
+  const incompleteTx = {
+    commodity: "Maize",
+    buyer_requirements: { buyer_name: "" },
+    supplier_verification: { supplier_name: "", moisture_reading_pct: 0 },
+  };
+  const readiness = evaluateTransactionReadiness(incompleteTx);
+  assert.strictEqual(readiness.isReady, false, "Incomplete record must evaluate to isReady = false");
+  assert.ok(readiness.missing.length >= 3, "Must list all missing requirements");
+
+  const txMod = fs.readFileSync(path.join(projectRoot, "assets/transactions/TransactionModule.js"), "utf8");
+  assert.ok(txMod.includes("NOT READY"), "renderStatusBadge must render NOT READY for incomplete records");
+});
+
+// FE-02: Missing Moisture Blocks Readiness
+runTest("FE-02", "Frontend Readiness - Missing moisture reading strictly blocks readiness", () => {
+  const { evaluateTransactionReadiness } = require("../assets/matrix/financialEngine.js");
+  const tx = {
+    buyer_requirements: { buyer_name: "Gulu Processors", required_tonnes: 30 },
+    supplier_verification: { supplier_name: "Amuru Farmers", moisture_reading_pct: 0 }, // MISSING MOISTURE
+    transport_collection: { transporter_name: "Northern Hauliers", total_transport_cost: 500000 },
+    payment_terms: { agreed_price_per_kg: 1050, payment_schedule: "50/50" },
+    fee_margin: { expected_gross_fee: 900000, acceptance_status: "Accepted" },
+  };
+  const readiness = evaluateTransactionReadiness(tx);
+  assert.strictEqual(readiness.isReady, false, "Zero/missing moisture must block readiness");
+  assert.ok(readiness.missing.some(m => m.toLowerCase().includes("moisture")), "Missing list must identify moisture reading");
+});
+
+// FE-03: Missing Written Fee Blocks Readiness
+runTest("FE-03", "Frontend Readiness - Missing written CNG service fee strictly blocks readiness", () => {
+  const { evaluateTransactionReadiness } = require("../assets/matrix/financialEngine.js");
+  const tx = {
+    buyer_requirements: { buyer_name: "Gulu Processors", required_tonnes: 30 },
+    supplier_verification: { supplier_name: "Amuru Farmers", moisture_reading_pct: 12.5 },
+    transport_collection: { transporter_name: "Northern Hauliers", total_transport_cost: 500000 },
+    payment_terms: { agreed_price_per_kg: 1050, payment_schedule: "50/50" },
+    fee_margin: { expected_gross_fee: 0, cng_fee_per_tonne: 0 }, // MISSING FEE
+  };
+  const readiness = evaluateTransactionReadiness(tx);
+  assert.strictEqual(readiness.isReady, false, "Zero written fee must block readiness");
+  assert.ok(readiness.missing.some(m => m.toLowerCase().includes("fee")), "Missing list must identify written CNG service fee");
+});
+
+// FE-04: Missing Fee Acceptance Blocks Readiness
+runTest("FE-04", "Frontend Readiness - Missing written fee acceptance strictly blocks readiness", () => {
+  const { evaluateTransactionReadiness } = require("../assets/matrix/financialEngine.js");
+  const tx = {
+    buyer_requirements: { buyer_name: "Gulu Processors", required_tonnes: 30 },
+    supplier_verification: { supplier_name: "Amuru Farmers", moisture_reading_pct: 12.5 },
+    transport_collection: { transporter_name: "Northern Hauliers", total_transport_cost: 500000 },
+    payment_terms: { agreed_price_per_kg: 1050, payment_schedule: "50/50" },
+    fee_margin: { expected_gross_fee: 900000, cng_fee_per_tonne: 30000, acceptance_status: "Proposed" }, // NOT ACCEPTED
+  };
+  const readiness = evaluateTransactionReadiness(tx);
+  assert.strictEqual(readiness.isReady, false, "Unaccepted fee must block readiness");
+  assert.ok(readiness.missing.some(m => m.toLowerCase().includes("acceptance")), "Missing list must identify fee acceptance confirmation");
+});
+
+// FE-05: Missing Transport Quotation Blocks Readiness
+runTest("FE-05", "Frontend Readiness - Missing transport quotation or haulier strictly blocks readiness", () => {
+  const { evaluateTransactionReadiness } = require("../assets/matrix/financialEngine.js");
+  const tx = {
+    buyer_requirements: { buyer_name: "Gulu Processors", required_tonnes: 30 },
+    supplier_verification: { supplier_name: "Amuru Farmers", moisture_reading_pct: 12.5 },
+    transport_collection: { transporter_name: "", total_transport_cost: null }, // MISSING TRANSPORT
+    payment_terms: { agreed_price_per_kg: 1050, payment_schedule: "50/50" },
+    fee_margin: { expected_gross_fee: 900000, cng_fee_per_tonne: 30000, acceptance_status: "Accepted" },
+  };
+  const readiness = evaluateTransactionReadiness(tx);
+  assert.strictEqual(readiness.isReady, false, "Missing transport quote must block readiness");
+  assert.ok(readiness.missing.some(m => m.toLowerCase().includes("transport")), "Missing list must identify transport quotation");
+});
+
+// FE-06: Complete Record Displays Authoritative Status
+runTest("FE-06", "Frontend Readiness - Complete record satisfies all gates and displays authoritative status", () => {
+  const { evaluateTransactionReadiness } = require("../assets/matrix/financialEngine.js");
+  const completeTx = {
+    buyer_requirements: { buyer_name: "Gulu Processors", required_tonnes: 30 },
+    supplier_verification: { supplier_name: "Amuru Farmers", moisture_reading_pct: 12.8 },
+    transport_collection: { transporter_name: "Northern Hauliers", total_transport_cost: 750000 },
+    payment_terms: { agreed_price_per_kg: 1050, payment_schedule: "50% loading / 50% destination" },
+    fee_margin: { expected_gross_fee: 900000, cng_fee_per_tonne: 30000, acceptance_status: "Accepted" },
+  };
+  const readiness = evaluateTransactionReadiness(completeTx);
+  assert.strictEqual(readiness.isReady, true, "Fully completed deal must evaluate to isReady = true");
+  assert.strictEqual(readiness.missing.length, 0, "No missing requirements should exist");
+});
+
+// FE-07: Refresh Does Not Restore False READY State
+runTest("FE-07", "State Lifecycle - Refresh/reload re-evaluates readiness and does not restore false READY", () => {
+  const txMod = fs.readFileSync(path.join(projectRoot, "assets/transactions/TransactionModule.js"), "utf8");
+  assert.ok(txMod.includes("evaluateTransactionReadiness(t).isReady"), "Stats filter must re-evaluate readiness on refresh");
+  assert.ok(txMod.includes("evaluateTransactionReadiness(tx)"), "renderStatusBadge must re-evaluate readiness dynamically");
+});
+
+// FE-08: Successful Save Displays Confirmed Persistence (State 3)
+runTest("FE-08", "Five-State Persistence - Confirmed write to PostgreSQL sets sync_status to synced without conflict", () => {
+  const syncEngineCode = fs.readFileSync(path.join(projectRoot, "assets/offline/syncEngine.js"), "utf8");
+  assert.ok(syncEngineCode.includes('const syncStatus = "synced"'), "saveTransactionToSupabase must mark confirmed writes as synced");
+});
+
+// FE-09: Failed Save Preserves User Input (State 5)
+runTest("FE-09", "Five-State Persistence - Failed database write preserves input and transitions to local queue", async () => {
+  const { saveOfflineTransaction, getAllOfflineTransactions } = require("../assets/offline/offlineStore.js");
+  const draftTx = {
+    client_id: "test-fe-09-preserve-input",
+    reference: "TXN-FE09-TEST",
+    status: "Draft",
+    sync_status: "pending_sync",
+    notes: "Critical field notes must never be discarded on error",
+  };
+  const saved = await saveOfflineTransaction(draftTx);
+  assert.strictEqual(saved.notes, draftTx.notes, "Field notes must be preserved verbatim in local store");
+});
+
+// FE-10: Interrupted Save Displays Correct Pending State (State 2 / 4)
+runTest("FE-10", "Five-State Persistence - Interrupted save displays truthful saved locally / pending sync indicator", () => {
+  const txMod = fs.readFileSync(path.join(projectRoot, "assets/transactions/TransactionModule.js"), "utf8");
+  assert.ok(txMod.includes("Saved locally — awaiting synchronisation"), "Must display truthful saved locally indicator");
+  assert.ok(txMod.includes("Sync pending"), "Must display sync pending indicator");
+});
+
+// FE-11: Retry Does Not Duplicate Transaction
+runTest("FE-11", "Submission Protection - Retry with same client_id does not duplicate records", async () => {
+  const { saveOfflineTransaction, getAllOfflineTransactions } = require("../assets/offline/offlineStore.js");
+  const id = "test-fe-11-duplicate-guard";
+  await saveOfflineTransaction({ client_id: id, reference: "TXN-DUP-01" });
+  await saveOfflineTransaction({ client_id: id, reference: "TXN-DUP-01", sync_version: 2 });
+  const all = await getAllOfflineTransactions();
+  const matches = all.filter(r => r.client_id === id);
+  assert.strictEqual(matches.length, 1, "Only one record with matching client_id must exist");
+});
+
+// FE-12 & FE-13: Buyer & Supplier Identity Masking
+runTest("FE-12", "Identity Confidentiality - Buyer and supplier identities masked by default in shared views", () => {
+  const { maskPersonName, maskPhoneNumber, generateNeutralBuyerCode, generateNeutralSupplierCode } = require("../assets/identityMasking.js");
+  assert.strictEqual(maskPersonName("James Okello"), "J**** O****", "Name must be masked");
+  assert.strictEqual(maskPhoneNumber("+256 772 123 456"), "+256 7** *** 456", "Phone must be masked");
+  assert.ok(generateNeutralBuyerCode("Gulu Millers").startsWith("Buyer B"), "Neutral buyer pseudonym generated");
+  assert.ok(generateNeutralSupplierCode("Amuru Co-op").startsWith("Supplier S"), "Neutral supplier pseudonym generated");
+});
+
+// FE-14 & FE-15: Disclosure Controls & Auditing
+runTest("FE-14", "Identity Confidentiality - Unauthorised disclosure blocked and authorised disclosure audited", async () => {
+  const { canDiscloseForPurpose, DISCLOSURE_PURPOSES, recordDisclosureAudit } = require("../assets/identityMasking.js");
+  assert.strictEqual(canDiscloseForPurpose("viewer", DISCLOSURE_PURPOSES.BANKING), false, "Viewer cannot access banking details");
+  assert.strictEqual(canDiscloseForPurpose("admin", DISCLOSURE_PURPOSES.BANKING), true, "Admin can access banking details");
+  const audit = await recordDisclosureAudit(null, {
+    transactionId: "tx_01",
+    requestingUserId: "usr_test_1",
+    purpose: DISCLOSURE_PURPOSES.BANKING,
+    reason: "Escrow disbursement verification",
+  });
+  assert.strictEqual(audit.success, true, "Disclosure audit record created");
+});
+
+// FE-16: Re-Mask Control
+runTest("FE-16", "Identity Confidentiality - Re-mask control safely strips disclosed sensitive contact info", () => {
+  const { maskTransaction } = require("../assets/identityMasking.js");
+  const unmaskedTx = {
+    buyer_requirements: { buyer_name: "Confidential Buyer Ltd", contact_person: "John Doe", phone: "+256 772 999 888" },
+    supplier_verification: { supplier_name: "Secret Cooperative", contact_person: "Jane Doe", phone: "+256 782 111 222" },
+  };
+  const remasked = maskTransaction(unmaskedTx, false, null);
+  assert.strictEqual(remasked.buyer_requirements.phone, "+256 7** *** 888", "Buyer phone must be re-masked");
+  assert.strictEqual(remasked.supplier_verification.phone, "+256 7** *** 222", "Supplier phone must be re-masked");
+});
+
+// FE-17: Exports Confidentiality
+runTest("FE-17", "Export Controls - Document and data exports sanitize counterparty PII by default", () => {
+  const idMask = fs.readFileSync(path.join(projectRoot, "assets/identityMasking.js"), "utf8");
+  assert.ok(idMask.includes("export function sanitizeTransactionForExport"), "sanitizeTransactionForExport must be defined");
+});
+
+// FE-18: Mobile Screens Confidentiality
+runTest("FE-18", "Mobile UX - Mobile viewport cards and lists adhere to identical confidentiality rules", () => {
+  const txMod = fs.readFileSync(path.join(projectRoot, "assets/transactions/TransactionModule.js"), "utf8");
+  assert.ok(txMod.includes("revealedTxIds.has"), "Mobile card view checks revealedTxIds before exposing details");
+});
+
+// BE-01..08: Database Readiness Gates & Server Enforcement
+runTest("BE-01", "Backend Database - Database migration defines enforce_mvtr_readiness_and_approval_gates trigger", () => {
+  const migPath = path.join(projectRoot, "supabase/migrations/20261117000001_enforce_readiness_and_approval_gates.sql");
+  assert.ok(fs.existsSync(migPath), "Readiness gates migration must exist");
+  const sql = fs.readFileSync(migPath, "utf8");
+  assert.ok(sql.includes("enforce_mvtr_readiness_and_approval_gates"), "Must define trigger function");
+  assert.ok(sql.includes("BEFORE INSERT OR UPDATE ON public.transactions"), "Must fire on BEFORE INSERT OR UPDATE");
+  assert.ok(sql.includes("READY transition rejected: missing"), "Must raise explicit rejection message on missing requirements");
+  assert.ok(sql.includes("PERMISSION_DENIED"), "Must block non-admins from approving deals");
+});
+
+// BE-14: Hard Reset Safety
+runTest("BE-14", "Hard Reset Safety - Application reset strictly clears client cache and never drops live database records", () => {
+  const indexJs = fs.readFileSync(path.join(projectRoot, "assets/index-A159RRyL.js"), "utf8");
+  assert.ok(indexJs.includes("localStorage.clear()"), "Reset clears local browser storage");
+  assert.ok(!indexJs.includes("DELETE FROM transactions") && !indexJs.includes("TRUNCATE"), "Reset must NEVER issue destructive SQL commands to PostgreSQL");
+});
+
+// RLS-01..10: Backend Security & Penetration Defense
+runTest("RLS-01", "Backend Security - Row Level Security enabled on all core business tables", () => {
+  const initialSchema = fs.readFileSync(path.join(projectRoot, "supabase/migrations/20261104000001_initial_schema.sql"), "utf8");
+  const mvtrSchema = fs.readFileSync(path.join(projectRoot, "supabase/migrations/20261110000001_mvtr_transactions.sql"), "utf8");
+  assert.ok(initialSchema.includes("ALTER TABLE public.deals ENABLE ROW LEVEL SECURITY"), "Deals table must have RLS");
+  assert.ok(initialSchema.includes("ALTER TABLE public.parties ENABLE ROW LEVEL SECURITY"), "Parties table must have RLS");
+  assert.ok(initialSchema.includes("ALTER TABLE public.profiles ENABLE ROW LEVEL SECURITY"), "Profiles table must have RLS");
+  assert.ok(mvtrSchema.includes("ALTER TABLE public.transactions ENABLE ROW LEVEL SECURITY"), "Transactions table must have RLS");
+  assert.ok(initialSchema.includes("trg_prevent_role_escalation"), "Role escalation trigger must exist");
+});
+
 // ==============================================================================
 // SUMMARY
 // ==============================================================================

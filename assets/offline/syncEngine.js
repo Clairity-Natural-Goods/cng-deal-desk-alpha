@@ -62,7 +62,7 @@ export async function saveTransactionToSupabase(record, currentUser = null) {
     }
   }
 
-  const syncStatus = record.sync_status || (record.status === "Draft" ? "pending_sync" : "synced");
+  const syncStatus = "synced"; // Confirmed write to PostgreSQL is synced
 
   const payload = {
     client_id: syncClientId,
