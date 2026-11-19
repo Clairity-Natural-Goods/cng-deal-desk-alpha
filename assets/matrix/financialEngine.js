@@ -867,3 +867,484 @@ export function evaluateTransactionReadiness(tx = {}) {
     missing,
   };
 }
+
+
+/**
+ * ==============================================================================
+ *   CNG FEE SPECIFICATION (CNG Fee.pdf) AUTHORITATIVE IMPLEMENTATION
+ *   Directives 4.1 - 4.5, 5, 6, 7
+ * ==============================================================================
+ */
+
+export const SACK_DEFAULTS = {
+  Maize: [100], // Common editable default: 100 kg
+  Rice: [50, 100], // Common editable defaults: 50 kg or 100 kg
+  Beans: [100],
+  Soybeans: [100],
+  Sorghum: [100],
+  Cassava: [100],
+  Sunflower: [50, 70],
+};
+
+export const COMMODITY_STANDARDS = {
+  Maize: {
+    statutoryLimitPct: 13.5,
+    standardName: "UNBS / EAS 2:2017",
+    standardVersion: "EAS 2:2017 (Maize grains — Specification)",
+    isPlaceholder: false,
+  },
+  Rice: {
+    statutoryLimitPct: 14.0, // Explicitly a configurable placeholder pending formal UNBS version confirmation
+    standardName: "UNBS Milled Rice (Pending Confirmation)",
+    standardVersion: "Placeholder 14.0% — Requires Formal UNBS Confirmation",
+    isPlaceholder: true,
+  },
+  Beans: {
+    statutoryLimitPct: 14.0,
+    standardName: "UNBS / EAS 46:2017",
+    standardVersion: "EAS 46:2017",
+    isPlaceholder: false,
+  },
+  Soybeans: {
+    statutoryLimitPct: 13.0,
+    standardName: "UNBS / EAS 758:2011",
+    standardVersion: "EAS 758:2011",
+    isPlaceholder: false,
+  },
+  Sunflower: {
+    statutoryLimitPct: 10.0,
+    standardName: "UNBS Sunflower Seed",
+    standardVersion: "US 103:2017",
+    isPlaceholder: false,
+  },
+};
+
+/**
+ * 4.1 Normalize and Reconcile Quantity
+ */
+export function reconcileQuantity({
+  declaredQtyKg = null,
+  verifiedWeighedQtyKg = null,
+  sackCount = null,
+  kgPerSack = null,
+  commodity = "Maize",
+} = {}) {
+  let calculatedKg = null;
+  if (sackCount !== null && kgPerSack !== null) {
+    calculatedKg = Number(sackCount) * Number(kgPerSack);
+  }
+
+  const verifiedQtyKg = verifiedWeighedQtyKg !== null
+    ? Number(verifiedWeighedQtyKg)
+    : (declaredQtyKg !== null ? Number(declaredQtyKg) : (calculatedKg ?? 0));
+
+  const quantityMt = verifiedQtyKg / 1000;
+  const varianceKg = declaredQtyKg !== null && verifiedWeighedQtyKg !== null
+    ? Number(verifiedWeighedQtyKg) - Number(declaredQtyKg)
+    : 0;
+
+  return {
+    declaredQtyKg: declaredQtyKg !== null ? Number(declaredQtyKg) : calculatedKg,
+    verifiedWeighedQtyKg: verifiedWeighedQtyKg !== null ? Number(verifiedWeighedQtyKg) : verifiedQtyKg,
+    verifiedQtyKg,
+    quantityMt,
+    sackCount: sackCount !== null ? Number(sackCount) : null,
+    kgPerSack: kgPerSack !== null ? Number(kgPerSack) : (SACK_DEFAULTS[commodity]?.[0] ?? 100),
+    varianceKg,
+    hasVariance: Math.abs(varianceKg) > 0.001,
+  };
+}
+
+/**
+ * 4.2 Authoritative CNG Procurement Service Fee Calculation
+ * 
+ * fee_percentage_amount = 0.03 * agreed_commodity_value
+ * fee_floor_amount = quantity_mt * 40000
+ * cng_procurement_fee = max(fee_percentage_amount, fee_floor_amount)
+ * 
+ * Fee base is BUYER'S AGREED COMMODITY VALUE only (excluding transport, handling, CNG charges).
+ */
+export function calculateCngProcurementFee({
+  verifiedQtyKg,
+  quantityMt = null,
+  buyerAgreedPricePerKg = null,
+  buyerAgreedPricePerMt = null,
+  agreedCommodityValue = null,
+  feePayer = "BUYER", // BUYER, SUPPLIER, SPLIT
+  splitBuyerPct = null,
+  splitSupplierPct = null,
+  splitBuyerAmount = null,
+  splitSupplierAmount = null,
+  additionalCngServices = [],
+} = {}) {
+  const qtyKg = Number(verifiedQtyKg ?? (quantityMt ? quantityMt * 1000 : 0));
+  const qtyMt = quantityMt !== null ? Number(quantityMt) : qtyKg / 1000;
+
+  let commodityValue = 0;
+  if (agreedCommodityValue !== null && agreedCommodityValue !== undefined) {
+    commodityValue = Number(agreedCommodityValue);
+  } else if (buyerAgreedPricePerKg !== null && buyerAgreedPricePerKg !== undefined) {
+    commodityValue = Number(buyerAgreedPricePerKg) * qtyKg;
+  } else if (buyerAgreedPricePerMt !== null && buyerAgreedPricePerMt !== undefined) {
+    commodityValue = Number(buyerAgreedPricePerMt) * qtyMt;
+  }
+
+  const feePercentageAmount = Math.round(0.03 * commodityValue);
+  const feeFloorAmount = Math.round(qtyMt * 40000);
+  const finalProcurementFee = Math.max(feePercentageAmount, feeFloorAmount);
+  const tier = feePercentageAmount >= feeFloorAmount ? "3%_PERCENTAGE_TIER" : "FLOOR_TIER_UGX_40000_MT";
+
+  let additionalServicesTotal = 0;
+  const processedAdditionalServices = (Array.isArray(additionalCngServices) ? additionalCngServices : []).map(s => {
+    const cost = Number(s.amount || 0);
+    additionalServicesTotal += cost;
+    return { name: s.name, amount: cost, payer: s.payer || feePayer };
+  });
+
+  const totalCngCharges = finalProcurementFee + additionalServicesTotal;
+
+  let buyerAllocatedFee = finalProcurementFee;
+  let supplierAllocatedFee = 0;
+  let splitValid = true;
+  let splitError = null;
+
+  const normalizedPayer = String(feePayer).toUpperCase();
+  if (normalizedPayer === "SUPPLIER") {
+    buyerAllocatedFee = 0;
+    supplierAllocatedFee = finalProcurementFee;
+  } else if (normalizedPayer === "SPLIT") {
+    if (splitBuyerPct !== null && splitSupplierPct !== null) {
+      const totalPct = Number(splitBuyerPct) + Number(splitSupplierPct);
+      if (Math.abs(totalPct - 100) > 0.01) {
+        splitValid = false;
+        splitError = `Split allocation percentages must total exactly 100%. Currently: ${totalPct}%.`;
+      } else {
+        buyerAllocatedFee = Math.round(finalProcurementFee * (Number(splitBuyerPct) / 100));
+        supplierAllocatedFee = finalProcurementFee - buyerAllocatedFee;
+      }
+    } else if (splitBuyerAmount !== null && splitSupplierAmount !== null) {
+      const totalAmt = Number(splitBuyerAmount) + Number(splitSupplierAmount);
+      if (Math.abs(totalAmt - finalProcurementFee) > 1) {
+        splitValid = false;
+        splitError = `Split allocation amounts (UGX ${totalAmt.toLocaleString()}) must match total fee (UGX ${finalProcurementFee.toLocaleString()}).`;
+      } else {
+        buyerAllocatedFee = Number(splitBuyerAmount);
+        supplierAllocatedFee = Number(splitSupplierAmount);
+      }
+    } else {
+      splitValid = false;
+      splitError = "Split fee payer requires explicit allocation percentages or amounts.";
+    }
+  }
+
+  return {
+    verifiedQtyKg: qtyKg,
+    quantityMt: qtyMt,
+    agreedCommodityValue: commodityValue,
+    feePercentageAmount,
+    feeFloorAmount,
+    finalProcurementFee,
+    tier,
+    feePayer: normalizedPayer,
+    buyerAllocatedFee,
+    supplierAllocatedFee,
+    splitValid,
+    splitError,
+    additionalServicesTotal,
+    additionalCngServices: processedAdditionalServices,
+    totalCngCharges,
+  };
+}
+
+/**
+ * 4.3 Authoritative Buyer Total Payable and Landed Cost Coverage
+ */
+export function calculateBuyerPayableAndCoverage({
+  buyerCommodityValue,
+  supplierCommodityCost = 0,
+  costLines = [],
+  cngProcurementFee = 0,
+  buyerAllocatedCngFee = null,
+  additionalCngCharges = 0,
+  buyerAllocatedAdditionalCharges = null,
+} = {}) {
+  const commVal = Number(buyerCommodityValue || 0);
+  const suppCost = Number(supplierCommodityCost || 0);
+  const bAllocFee = buyerAllocatedCngFee !== null ? Number(buyerAllocatedCngFee) : Number(cngProcurementFee || 0);
+  const bAllocAdd = buyerAllocatedAdditionalCharges !== null ? Number(buyerAllocatedAdditionalCharges) : Number(additionalCngCharges || 0);
+
+  let buyerDirectCosts = 0;
+  let supplierDirectCosts = 0;
+  let cngDirectCosts = 0;
+  const processedCostLines = [];
+
+  for (const line of (Array.isArray(costLines) ? costLines : [])) {
+    const amt = Number(line.amount || 0);
+    const payer = String(line.payer || "BUYER").toUpperCase();
+    if (payer === "BUYER") {
+      buyerDirectCosts += amt;
+    } else if (payer === "SUPPLIER") {
+      supplierDirectCosts += amt;
+    } else if (payer === "CNG") {
+      cngDirectCosts += amt;
+    }
+    processedCostLines.push({ ...line, amount: amt, payer });
+  }
+
+  const buyerTotalPayable = commVal + buyerDirectCosts + bAllocFee + bAllocAdd;
+  const totalLandedCost = suppCost + buyerDirectCosts + supplierDirectCosts + cngDirectCosts;
+  const requiredCoverageTarget = totalLandedCost + Number(cngProcurementFee || 0);
+  const coverageDifference = buyerTotalPayable - requiredCoverageTarget;
+  const isCoveragePassed = buyerTotalPayable >= requiredCoverageTarget;
+
+  return {
+    buyerCommodityValue: commVal,
+    supplierCommodityCost: suppCost,
+    buyerDirectCosts,
+    supplierDirectCosts,
+    cngDirectCosts,
+    buyerAllocatedCngFee: bAllocFee,
+    buyerAllocatedAdditionalCharges: bAllocAdd,
+    buyerTotalPayable,
+    totalLandedCost,
+    requiredCoverageTarget,
+    coverageDifference,
+    isCoveragePassed,
+    costLines: processedCostLines,
+  };
+}
+
+/**
+ * 4.4 Authoritative CNG Retained Contribution & Net Profit
+ */
+export function calculateAuthoritativeCngEconomics({
+  earnedOrCollectedFees = 0,
+  directCngOperationalCosts = 0,
+  companyOverheadAllocation = 0,
+  taxRatePct = 0,
+  isQualityBlocked = false,
+} = {}) {
+  if (isQualityBlocked) {
+    return {
+      earnedOrCollectedFees: 0,
+      directCngOperationalCosts: Number(directCngOperationalCosts || 0),
+      retainedContribution: null,
+      netProfitBeforeTax: null,
+      taxProvision: null,
+      netProfit: null,
+      status: "N/A — QUALITY BLOCKED",
+    };
+  }
+
+  const fees = Number(earnedOrCollectedFees || 0);
+  const directOps = Number(directCngOperationalCosts || 0);
+  const retainedContribution = fees - directOps;
+  const overhead = Number(companyOverheadAllocation || 0);
+  const netProfitBeforeTax = retainedContribution - overhead;
+  const taxRate = Number(taxRatePct || 0);
+  const taxProvision = netProfitBeforeTax > 0 ? Math.round(netProfitBeforeTax * (taxRate / 100)) : 0;
+  const netProfit = netProfitBeforeTax - taxProvision;
+
+  return {
+    earnedOrCollectedFees: fees,
+    directCngOperationalCosts: directOps,
+    retainedContribution,
+    overheadAllocation: overhead,
+    netProfitBeforeTax,
+    taxProvision,
+    netProfit,
+    status: retainedContribution >= 0 ? "CONTRIBUTION_POSITIVE" : "CONTRIBUTION_NEGATIVE",
+  };
+}
+
+/**
+ * 5. Authoritative Moisture & Quality Gate Evaluator
+ */
+export function evaluateAuthoritativeMoistureQuality({
+  commodity = "Maize",
+  actualMoisturePct,
+  buyerLimitPct = null,
+  statutoryLimitPct = null,
+  standardName = null,
+  standardVersion = null,
+  testDateTime = null,
+  tester = null,
+  evidence = null,
+} = {}) {
+  const std = COMMODITY_STANDARDS[commodity] || {
+    statutoryLimitPct: 13.5,
+    standardName: "UNBS Standard",
+    standardVersion: "v1.0",
+    isPlaceholder: false,
+  };
+
+  const statutory = statutoryLimitPct !== null ? Number(statutoryLimitPct) : std.statutoryLimitPct;
+  const buyer = buyerLimitPct !== null ? Number(buyerLimitPct) : statutory;
+
+  const effectiveLimitPct = Math.min(statutory, buyer);
+  const actual = Number(actualMoisturePct);
+
+  const isPassed = actual <= effectiveLimitPct;
+  const isBoundaryEqual = Math.abs(actual - effectiveLimitPct) < 0.001;
+
+  let qualityStatus = isPassed ? "PASSED" : "FAILED";
+  let explanation = "";
+
+  if (isPassed) {
+    explanation = `Actual moisture ${actual}% satisfies effective limit ${effectiveLimitPct}% (Statutory: ${statutory}%, Buyer: ${buyer}%).`;
+  } else {
+    explanation = `Quality Gate FAILED: Actual moisture ${actual}% exceeds effective limit ${effectiveLimitPct}%. ` +
+      (buyer > statutory
+        ? `Buyer tolerance (${buyer}%) cannot override statutory standard (${statutory}%).`
+        : `Stricter buyer limit (${buyer}%) applies.`);
+  }
+
+  return {
+    commodity,
+    actualMoisturePct: actual,
+    statutoryLimitPct: statutory,
+    buyerLimitPct: buyer,
+    effectiveLimitPct,
+    isPassed,
+    isBoundaryEqual,
+    qualityStatus,
+    standardName: standardName || std.standardName,
+    standardVersion: standardVersion || std.standardVersion,
+    isStatutoryPlaceholder: std.isPlaceholder,
+    testDateTime: testDateTime || new Date().toISOString(),
+    tester: tester || "Field Officer",
+    evidence: evidence || "Calibrated probe test",
+    explanation,
+  };
+}
+
+/**
+ * 6. Authoritative Quote Validity Evaluator
+ */
+export function evaluateAuthoritativeQuoteValidity({
+  quoteTimestamp,
+  quoteExpiry,
+  currentServerTime = new Date(),
+  extendedBy = null,
+  extensionReason = null,
+  extensionEvidence = null,
+} = {}) {
+  if (!quoteTimestamp || !quoteExpiry) {
+    return {
+      isValid: false,
+      isExpired: true,
+      error: "Missing quote timestamp or expiry date. Executable quotes require both.",
+    };
+  }
+
+  const now = new Date(currentServerTime).getTime();
+  const expiry = new Date(quoteExpiry).getTime();
+
+  let isExpired = now > expiry;
+  let extensionApplied = false;
+
+  if (isExpired && extendedBy) {
+    const authorizer = String(extendedBy).trim().toLowerCase();
+    if (authorizer === "jovin" || authorizer === "collins") {
+      if (extensionReason && extensionEvidence) {
+        extensionApplied = true;
+        isExpired = false;
+      }
+    }
+  }
+
+  return {
+    isValid: !isExpired,
+    isExpired,
+    quoteTimestamp,
+    quoteExpiry,
+    currentServerTime: new Date(currentServerTime).toISOString(),
+    extensionApplied,
+    extendedBy,
+    extensionReason,
+    extensionEvidence,
+  };
+}
+
+/**
+ * 7. Authoritative Dispatch Gate Evaluator (6 Independent States)
+ */
+export function evaluateAuthoritativeDispatchGate({
+  stockStatus = "PENDING",
+  qualityStatus = "PENDING",
+  commercialApprovalStatus = "PENDING",
+  fundingStatus = "PENDING",
+  deliveryStatus = "PENDING",
+  feeCollectionStatus = "NOT_INVOICED",
+  quotesValid = true,
+  logisticsConfirmed = false,
+  feeAccepted = false,
+  mdException = null,
+} = {}) {
+  const gates = [];
+  const blockers = [];
+
+  const g1 = stockStatus === "VERIFIED";
+  gates.push({ gate: "STOCK_VERIFIED", passed: g1, status: stockStatus });
+  if (!g1) blockers.push("Stock and verified weighed quantity required");
+
+  const g2 = qualityStatus === "PASSED";
+  gates.push({ gate: "QUALITY_PASSED", passed: g2, status: qualityStatus });
+  if (!g2) blockers.push("Quality assay moisture must be PASSED");
+
+  gates.push({ gate: "QUOTES_ACTIVE", passed: Boolean(quotesValid) });
+  if (!quotesValid) blockers.push("Active unexpired buyer and supplier quotes required");
+
+  gates.push({ gate: "LOGISTICS_CONFIRMED", passed: Boolean(logisticsConfirmed) });
+  if (!logisticsConfirmed) blockers.push("Confirmed haulier and delivery arrangements required");
+
+  gates.push({ gate: "FEE_ACCEPTED", passed: Boolean(feeAccepted) });
+  if (!feeAccepted) blockers.push("Written fee acceptance confirmation required");
+
+  const g6 = commercialApprovalStatus === "APPROVED";
+  gates.push({ gate: "COMMERCIAL_APPROVAL", passed: g6, status: commercialApprovalStatus });
+  if (!g6) blockers.push("Commercial underwriting must be APPROVED");
+
+  const g7 = fundingStatus === "FUNDED";
+  gates.push({ gate: "FUNDING_CONFIRMED", passed: g7, status: fundingStatus });
+  if (!g7) blockers.push("Cleared funding confirmation (FUNDED) required before dispatch");
+
+  const allNormalGatesPassed = g1 && g2 && quotesValid && logisticsConfirmed && feeAccepted && g6 && g7;
+
+  let exceptionActive = false;
+  let exceptionAudit = null;
+  if (!allNormalGatesPassed && mdException) {
+    const authorizer = String(mdException.authorizedBy || "").trim().toLowerCase();
+    if (authorizer === "clarence" && mdException.reason && mdException.evidence) {
+      exceptionActive = true;
+      exceptionAudit = {
+        authorizedBy: "Clarence",
+        reason: mdException.reason,
+        timestamp: mdException.timestamp || new Date().toISOString(),
+        evidence: mdException.evidence,
+        bypassedBlockers: [...blockers],
+      };
+    }
+  }
+
+  const isDispatchReady = allNormalGatesPassed || exceptionActive;
+  const dispatchState = isDispatchReady ? "DISPATCH_PERMITTED" : "DISPATCH_BLOCKED";
+
+  return {
+    isDispatchReady,
+    dispatchState,
+    allNormalGatesPassed,
+    exceptionActive,
+    exceptionAudit,
+    blockers: isDispatchReady ? [] : blockers,
+    gates,
+    states: {
+      stock_status: stockStatus,
+      quality_status: qualityStatus,
+      commercial_approval_status: commercialApprovalStatus,
+      funding_status: fundingStatus,
+      delivery_status: isDispatchReady ? "DISPATCHED" : deliveryStatus,
+      fee_collection_status: feeCollectionStatus,
+    },
+  };
+}

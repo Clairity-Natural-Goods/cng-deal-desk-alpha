@@ -2413,6 +2413,329 @@ runTest("RLS-01", "Backend Security - Row Level Security enabled on all core bus
 });
 
 // ==============================================================================
+// CNG FEE SPECIFICATION (CNG Fee.pdf) AUTHORITATIVE VERIFICATION TESTS
+// Section 4.5 Mandatory Regression Fixtures (Cases A, B, C) and Calculation Rules
+// ==============================================================================
+
+import {
+  calculateCngProcurementFee,
+  calculateBuyerPayableAndCoverage,
+  calculateAuthoritativeCngEconomics,
+  evaluateAuthoritativeMoistureQuality,
+  evaluateAuthoritativeQuoteValidity,
+  evaluateAuthoritativeDispatchGate,
+  reconcileQuantity,
+  COMMODITY_STANDARDS,
+} from "../assets/matrix/financialEngine.js";
+
+// CASE A: Maize 40 MT (3% tier, PASS)
+runTest("FEE-CASE-A", "CNG Fee.pdf Case A - Maize 40 MT 3% tier, moisture pass, UGX 61,740,000 payable", () => {
+  const qty = reconcileQuantity({ verifiedWeighedQtyKg: 40000, sackCount: 400, kgPerSack: 100, commodity: "Maize" });
+  assert.strictEqual(qty.quantityMt, 40, "40,000 kg must normalize to 40 MT");
+
+  const fee = calculateCngProcurementFee({
+    verifiedQtyKg: qty.verifiedQtyKg,
+    quantityMt: qty.quantityMt,
+    buyerAgreedPricePerKg: 1450,
+    feePayer: "BUYER",
+  });
+  assert.strictEqual(fee.agreedCommodityValue, 58000000, "Commodity value must be UGX 58,000,000");
+  assert.strictEqual(fee.feePercentageAmount, 1740000, "3% fee must be UGX 1,740,000");
+  assert.strictEqual(fee.feeFloorAmount, 1600000, "Floor must be UGX 1,600,000 (40 x 40,000)");
+  assert.strictEqual(fee.finalProcurementFee, 1740000, "Final fee must be UGX 1,740,000 (3% tier wins)");
+  assert.strictEqual(fee.tier, "3%_PERCENTAGE_TIER");
+
+  const payable = calculateBuyerPayableAndCoverage({
+    buyerCommodityValue: fee.agreedCommodityValue,
+    supplierCommodityCost: 40000 * 1380, // UGX 55,200,000
+    costLines: [{ category: "Transport & Handling", amount: 2000000, payer: "BUYER" }],
+    cngProcurementFee: fee.finalProcurementFee,
+  });
+  assert.strictEqual(payable.buyerTotalPayable, 61740000, "Buyer total payable must be UGX 61,740,000");
+  assert.strictEqual(payable.isCoveragePassed, true, "Buyer coverage test must pass");
+
+  const quality = evaluateAuthoritativeMoistureQuality({
+    commodity: "Maize",
+    actualMoisturePct: 13.2,
+    buyerLimitPct: 14.0,
+    statutoryLimitPct: 13.5,
+  });
+  assert.strictEqual(quality.effectiveLimitPct, 13.5, "Effective limit must be statutory 13.5%");
+  assert.strictEqual(quality.isPassed, true, "Actual 13.2% must pass against 13.5%");
+
+  const economics = calculateAuthoritativeCngEconomics({
+    earnedOrCollectedFees: fee.finalProcurementFee,
+    directCngOperationalCosts: 150000,
+  });
+  assert.strictEqual(economics.retainedContribution, 1590000, "Expected contribution must be UGX 1,590,000");
+
+  const dispatch = evaluateAuthoritativeDispatchGate({
+    stockStatus: "VERIFIED",
+    qualityStatus: quality.qualityStatus,
+    commercialApprovalStatus: "APPROVED",
+    fundingStatus: "PENDING", // Not funded yet
+    logisticsConfirmed: true,
+    feeAccepted: true,
+  });
+  assert.strictEqual(dispatch.isDispatchReady, false, "Dispatch must wait for FUNDED status");
+});
+
+// CASE B: Maize 50 MT (Floor tier, BLOCKED on quality)
+runTest("FEE-CASE-B", "CNG Fee.pdf Case B - Maize 50 MT floor tier, statutory moisture blocks deal", () => {
+  const qty = reconcileQuantity({ verifiedWeighedQtyKg: 50000, sackCount: 500, kgPerSack: 100, commodity: "Maize" });
+  assert.strictEqual(qty.quantityMt, 50, "50,000 kg must normalize to 50 MT");
+
+  const fee = calculateCngProcurementFee({
+    verifiedQtyKg: qty.verifiedQtyKg,
+    quantityMt: qty.quantityMt,
+    buyerAgreedPricePerKg: 1100,
+    feePayer: "BUYER",
+  });
+  assert.strictEqual(fee.agreedCommodityValue, 55000000, "Commodity value must be UGX 55,000,000");
+  assert.strictEqual(fee.feePercentageAmount, 1650000, "3% fee is UGX 1,650,000");
+  assert.strictEqual(fee.feeFloorAmount, 2000000, "Floor must be UGX 2,000,000 (50 x 40,000)");
+  assert.strictEqual(fee.finalProcurementFee, 2000000, "Final fee must be UGX 2,000,000 (floor tier wins)");
+  assert.strictEqual(fee.tier, "FLOOR_TIER_UGX_40000_MT");
+
+  const payable = calculateBuyerPayableAndCoverage({
+    buyerCommodityValue: fee.agreedCommodityValue,
+    supplierCommodityCost: 50000 * 1020, // UGX 51,000,000
+    costLines: [{ category: "Transport & Handling", amount: 2500000, payer: "BUYER" }],
+    cngProcurementFee: fee.finalProcurementFee,
+  });
+  assert.strictEqual(payable.buyerTotalPayable, 59500000, "Buyer total payable must be UGX 59,500,000");
+
+  // Higher buyer tolerance (14.5%) CANNOT relax statutory maximum (13.5%)
+  const quality = evaluateAuthoritativeMoistureQuality({
+    commodity: "Maize",
+    actualMoisturePct: 13.8,
+    buyerLimitPct: 14.5,
+    statutoryLimitPct: 13.5,
+  });
+  assert.strictEqual(quality.effectiveLimitPct, 13.5, "Effective limit remains 13.5% despite buyer 14.5%");
+  assert.strictEqual(quality.isPassed, false, "Actual 13.8% must fail against 13.5% statutory limit");
+  assert.strictEqual(quality.qualityStatus, "FAILED");
+
+  const economics = calculateAuthoritativeCngEconomics({
+    earnedOrCollectedFees: fee.finalProcurementFee,
+    directCngOperationalCosts: 150000,
+    isQualityBlocked: true,
+  });
+  assert.strictEqual(economics.retainedContribution, null, "Expected contribution is N/A while quality-blocked");
+
+  const dispatch = evaluateAuthoritativeDispatchGate({
+    stockStatus: "VERIFIED",
+    qualityStatus: quality.qualityStatus, // FAILED
+    commercialApprovalStatus: "APPROVED",
+    fundingStatus: "FUNDED",
+    logisticsConfirmed: true,
+    feeAccepted: true,
+  });
+  assert.strictEqual(dispatch.isDispatchReady, false, "Deal must remain BLOCKED when quality fails");
+  assert.ok(dispatch.blockers.some(b => b.includes("Quality assay")), "Blockers must cite quality failure");
+});
+
+// CASE C: Rice 10 MT (Stricter buyer limit, PASS)
+runTest("FEE-CASE-C", "CNG Fee.pdf Case C - Rice 10 MT stricter buyer limit 13.0% passes, UGX 33,560,000 payable", () => {
+  const qty = reconcileQuantity({ verifiedWeighedQtyKg: 10000, sackCount: 200, kgPerSack: 50, commodity: "Rice" });
+  assert.strictEqual(qty.quantityMt, 10, "10,000 kg must normalize to 10 MT");
+
+  const fee = calculateCngProcurementFee({
+    verifiedQtyKg: qty.verifiedQtyKg,
+    quantityMt: qty.quantityMt,
+    buyerAgreedPricePerKg: 3200,
+    feePayer: "BUYER",
+  });
+  assert.strictEqual(fee.agreedCommodityValue, 32000000, "Commodity value must be UGX 32,000,000");
+  assert.strictEqual(fee.feePercentageAmount, 960000, "3% fee is UGX 960,000");
+  assert.strictEqual(fee.feeFloorAmount, 400000, "Floor is UGX 400,000 (10 x 40,000)");
+  assert.strictEqual(fee.finalProcurementFee, 960000, "Final fee must be UGX 960,000 (3% tier wins)");
+
+  const payable = calculateBuyerPayableAndCoverage({
+    buyerCommodityValue: fee.agreedCommodityValue,
+    supplierCommodityCost: 10000 * 3050, // UGX 30,500,000
+    costLines: [{ category: "Transport & Handling", amount: 600000, payer: "BUYER" }],
+    cngProcurementFee: fee.finalProcurementFee,
+  });
+  assert.strictEqual(payable.buyerTotalPayable, 33560000, "Buyer total payable must be UGX 33,560,000");
+
+  // Stricter buyer limit (13.0%) applies over statutory placeholder (14.0%)
+  const quality = evaluateAuthoritativeMoistureQuality({
+    commodity: "Rice",
+    actualMoisturePct: 12.8,
+    buyerLimitPct: 13.0,
+    statutoryLimitPct: 14.0,
+  });
+  assert.strictEqual(quality.effectiveLimitPct, 13.0, "Effective limit must be stricter buyer limit 13.0%");
+  assert.strictEqual(quality.isPassed, true, "Actual 12.8% must pass against 13.0%");
+  assert.strictEqual(quality.isStatutoryPlaceholder, true, "Rice statutory 14.0% must be flagged as placeholder");
+
+  const economics = calculateAuthoritativeCngEconomics({
+    earnedOrCollectedFees: fee.finalProcurementFee,
+    directCngOperationalCosts: 100000,
+  });
+  assert.strictEqual(economics.retainedContribution, 860000, "Expected contribution must be UGX 860,000");
+
+  const dispatch = evaluateAuthoritativeDispatchGate({
+    stockStatus: "VERIFIED",
+    qualityStatus: quality.qualityStatus,
+    commercialApprovalStatus: "APPROVED",
+    fundingStatus: "FUNDED",
+    logisticsConfirmed: true,
+    feeAccepted: true,
+  });
+  assert.strictEqual(dispatch.isDispatchReady, true, "Dispatch permitted once APPROVED and FUNDED");
+});
+
+// Additional Calculation & Operational Rule Tests
+runTest("FEE-BOUNDARY-01", "CNG Fee - Exact equality boundary between 3% and UGX 40,000/MT floor", () => {
+  // If price is exactly 1,333,333.33/MT (1,333.333/kg), 3% equals UGX 40,000/MT
+  const fee = calculateCngProcurementFee({
+    verifiedQtyKg: 30000,
+    quantityMt: 30,
+    agreedCommodityValue: 40000000, // 30 MT @ ~1,333.33/kg
+  });
+  assert.strictEqual(fee.feePercentageAmount, 1200000, "3% of 40M is 1,200,000");
+  assert.strictEqual(fee.feeFloorAmount, 1200000, "30 MT x 40,000 is 1,200,000");
+  assert.strictEqual(fee.finalProcurementFee, 1200000, "Boundary equality must return exact amount");
+});
+
+runTest("QTY-SACKS-01", "Quantity Conversions - Sack counts, fractional sacks, and weighed kg variance", () => {
+  const recon = reconcileQuantity({
+    declaredQtyKg: 20000,
+    verifiedWeighedQtyKg: 19850,
+    sackCount: 198.5,
+    kgPerSack: 100,
+    commodity: "Maize",
+  });
+  assert.strictEqual(recon.verifiedQtyKg, 19850, "Verified weighed kg is authoritative");
+  assert.strictEqual(recon.quantityMt, 19.85, "19,850 kg equals 19.85 MT");
+  assert.strictEqual(recon.varianceKg, -150, "Variance is -150 kg");
+  assert.strictEqual(recon.hasVariance, true);
+});
+
+runTest("PRICE-NORM-01", "Price Normalization - Per-kg vs Per-MT quote yields identical commodity value", () => {
+  const feeKg = calculateCngProcurementFee({ verifiedQtyKg: 25000, buyerAgreedPricePerKg: 1500 });
+  const feeMt = calculateCngProcurementFee({ quantityMt: 25, buyerAgreedPricePerMt: 1500000 });
+  assert.strictEqual(feeKg.agreedCommodityValue, 37500000);
+  assert.strictEqual(feeMt.agreedCommodityValue, 37500000);
+  assert.strictEqual(feeKg.finalProcurementFee, feeMt.finalProcurementFee);
+});
+
+runTest("PAYER-SPLIT-01", "Fee Payer - Split allocation validates exact 100% and rejects invalid split", () => {
+  const validSplit = calculateCngProcurementFee({
+    verifiedQtyKg: 20000,
+    buyerAgreedPricePerKg: 1500,
+    feePayer: "SPLIT",
+    splitBuyerPct: 60,
+    splitSupplierPct: 40,
+  });
+  assert.strictEqual(validSplit.splitValid, true);
+  assert.strictEqual(validSplit.buyerAllocatedFee, Math.round(validSplit.finalProcurementFee * 0.6));
+  assert.strictEqual(validSplit.supplierAllocatedFee, validSplit.finalProcurementFee - validSplit.buyerAllocatedFee);
+
+  const invalidSplit = calculateCngProcurementFee({
+    verifiedQtyKg: 20000,
+    buyerAgreedPricePerKg: 1500,
+    feePayer: "SPLIT",
+    splitBuyerPct: 50,
+    splitSupplierPct: 30, // Totals 80%
+  });
+  assert.strictEqual(invalidSplit.splitValid, false, "Non-100% split must be marked invalid");
+});
+
+runTest("COST-ALLOC-01", "Cost Allocation - Costs allocated strictly to BUYER, SUPPLIER, or CNG", () => {
+  const payable = calculateBuyerPayableAndCoverage({
+    buyerCommodityValue: 50000000,
+    supplierCommodityCost: 45000000,
+    costLines: [
+      { category: "Transport", amount: 1500000, payer: "BUYER" },
+      { category: "Handling", amount: 500000, payer: "SUPPLIER" },
+      { category: "Assay Fee", amount: 100000, payer: "CNG" },
+    ],
+    cngProcurementFee: 1500000,
+  });
+  assert.strictEqual(payable.buyerDirectCosts, 1500000, "Buyer direct costs must only include BUYER payer");
+  assert.strictEqual(payable.supplierDirectCosts, 500000, "Supplier direct costs must only include SUPPLIER payer");
+  assert.strictEqual(payable.cngDirectCosts, 100000, "CNG direct costs must only include CNG payer");
+  assert.strictEqual(payable.buyerTotalPayable, 50000000 + 1500000 + 1500000, "Buyer payable = 50M + 1.5M + 1.5M = 53M");
+});
+
+runTest("CONTRIB-REV-01", "CNG Economics - Uncollected fees, grain value, and escrow do NOT count as CNG revenue", () => {
+  const econ = calculateAuthoritativeCngEconomics({
+    earnedOrCollectedFees: 1500000, // Only collected fees count
+    directCngOperationalCosts: 200000,
+    companyOverheadAllocation: 150000,
+    taxRatePct: 30,
+  });
+  assert.strictEqual(econ.retainedContribution, 1300000);
+  assert.strictEqual(econ.netProfitBeforeTax, 1150000);
+  assert.strictEqual(econ.taxProvision, 345000);
+  assert.strictEqual(econ.netProfit, 805000);
+});
+
+runTest("QUOTE-EXPIRY-01", "Quote Validity - Missing/expired quotes block deal; extension requires Jovin or Collins", () => {
+  const missing = evaluateAuthoritativeQuoteValidity({});
+  assert.strictEqual(missing.isValid, false, "Missing timestamp/expiry must fail");
+
+  const pastDate = new Date(Date.now() - 3600000).toISOString(); // 1 hr ago
+  const futureDate = new Date(Date.now() + 86400000).toISOString(); // 24 hrs future
+
+  const active = evaluateAuthoritativeQuoteValidity({ quoteTimestamp: pastDate, quoteExpiry: futureDate });
+  assert.strictEqual(active.isValid, true, "Future expiry must be active");
+
+  const expired = evaluateAuthoritativeQuoteValidity({
+    quoteTimestamp: new Date(Date.now() - 172800000).toISOString(),
+    quoteExpiry: pastDate,
+  });
+  assert.strictEqual(expired.isValid, false, "Past expiry must be expired");
+
+  // Valid extension by Collins with reason and evidence
+  const extended = evaluateAuthoritativeQuoteValidity({
+    quoteTimestamp: new Date(Date.now() - 172800000).toISOString(),
+    quoteExpiry: pastDate,
+    extendedBy: "Collins",
+    extensionReason: "Haulier delayed by road repairs",
+    extensionEvidence: "Signed addendum #EXT-004",
+  });
+  assert.strictEqual(extended.isValid, true, "Authorized extension by Collins must be valid");
+  assert.strictEqual(extended.extensionApplied, true);
+});
+
+runTest("DISPATCH-GATE-01", "Dispatch Gates - Requires BOTH approved and funded; MD Clarence exception audited", () => {
+  // Missing funding blocks dispatch
+  const blocked = evaluateAuthoritativeDispatchGate({
+    stockStatus: "VERIFIED",
+    qualityStatus: "PASSED",
+    commercialApprovalStatus: "APPROVED",
+    fundingStatus: "PENDING",
+    logisticsConfirmed: true,
+    feeAccepted: true,
+  });
+  assert.strictEqual(blocked.isDispatchReady, false);
+  assert.strictEqual(blocked.dispatchState, "DISPATCH_BLOCKED");
+
+  // Exception by MD Clarence permits dispatch with audit log
+  const exception = evaluateAuthoritativeDispatchGate({
+    stockStatus: "VERIFIED",
+    qualityStatus: "PASSED",
+    commercialApprovalStatus: "APPROVED",
+    fundingStatus: "PENDING",
+    logisticsConfirmed: true,
+    feeAccepted: true,
+    mdException: {
+      authorizedBy: "Clarence",
+      reason: "Emergency grain corridor relief delivery; buyer sovereign escrow confirmed",
+      evidence: "Sovereign Letter of Credit #LC-2026-99",
+    },
+  });
+  assert.strictEqual(exception.isDispatchReady, true);
+  assert.strictEqual(exception.dispatchState, "DISPATCH_PERMITTED");
+  assert.strictEqual(exception.exceptionActive, true);
+  assert.strictEqual(exception.exceptionAudit.authorizedBy, "Clarence");
+});
+
+// ==============================================================================
 // SUMMARY
 // ==============================================================================
 await testQueue;

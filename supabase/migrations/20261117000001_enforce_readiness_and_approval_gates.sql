@@ -71,7 +71,7 @@ BEGIN
     END IF;
 
     IF (NEW.status = 'Approved' OR coalesce(NEW.approval->>'status', '') = 'Approved') AND 
-       coalesce(NEW.fee_margin->>'acceptance_status', '') NOT IN ('Accepted', 'Confirmed') THEN
+      coalesce(NEW.fee_margin->>'acceptance_status', '') NOT IN ('Accepted', 'Confirmed') THEN
       v_missing := array_append(v_missing, 'fee_acceptance');
     END IF;
 
