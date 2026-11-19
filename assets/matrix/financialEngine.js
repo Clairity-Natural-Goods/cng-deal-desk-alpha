@@ -1348,3 +1348,90 @@ export function evaluateAuthoritativeDispatchGate({
     },
   };
 }
+
+
+/**
+ * 8. Authoritative Decision Matrix Snapshot & Amendment Control (Section 8)
+ * 
+ * Transactions inherit the approved Decision Matrix financial snapshot as read-only.
+ * Any material financial change creates an amendment, recalculates the matrix,
+ * and forces re-approval.
+ */
+export function createDecisionMatrixSnapshot(matrixResult, metadata = {}) {
+  if (!matrixResult) return null;
+  const timestamp = new Date().toISOString();
+  const snapshotInputs = {
+    commodity: matrixResult.commodity || "Maize",
+    volumeMT: matrixResult.volumeMT || 0,
+    volumeKG: matrixResult.volumeKG || 0,
+    basePrice: matrixResult.basePrice || 0,
+    buyerPricePerKg: matrixResult.buyerPricePerKg || matrixResult.basePrice || 0,
+    transportCost: matrixResult.transportCost || 0,
+    handlingCogs: matrixResult.handlingCogs || 0,
+    feePayer: matrixResult.feePayer || "BUYER",
+  };
+
+  const snapshotOutputs = {
+    grossRevenue: matrixResult.grossRevenue || 0,
+    totalCosts: matrixResult.totalCosts || 0,
+    netMargin: matrixResult.netMargin || 0,
+    marginPercentage: matrixResult.marginPercentage || 0,
+    cngProcurementFee: matrixResult.cngProcurementFee?.finalProcurementFee || matrixResult.serviceEconomics?.earnedServiceRevenue || 0,
+    buyerTotalPayable: matrixResult.buyerPayableBreakdown?.buyerTotalPayable || matrixResult.buyerCoverage?.buyerAmount || 0,
+    retainedContribution: matrixResult.serviceEconomics?.retainedContribution || 0,
+  };
+
+  return {
+    snapshot_version: Number(metadata.version || 1),
+    engine_version: "2.1.0-cng-fee-pdf",
+    approved_at: metadata.approvedAt || timestamp,
+    approved_by: metadata.approvedBy || "Clarence (Managing Director)",
+    is_approved_snapshot: true,
+    status: "APPROVED_SNAPSHOT",
+    inputs: snapshotInputs,
+    outputs: snapshotOutputs,
+  };
+}
+
+/**
+ * Detect Material Amendments between Current Form Inputs and Approved Snapshot
+ */
+export function detectFinancialAmendment(currentInputs = {}, approvedSnapshot = null) {
+  if (!approvedSnapshot || !approvedSnapshot.inputs) {
+    return { hasAmendment: false, modifiedFields: [], isSnapshotStale: false };
+  }
+
+  const snap = approvedSnapshot.inputs;
+  const modified = [];
+
+  const currVol = Number(currentInputs.volumeMT || currentInputs.volume || (currentInputs.volumeKG ? currentInputs.volumeKG / 1000 : 0));
+  if (Math.abs(currVol - snap.volumeMT) > 0.001) {
+    modified.push(`Volume (Snapshot: ${snap.volumeMT} MT, Current: ${currVol} MT)`);
+  }
+
+  const currPrice = Number(currentInputs.buyerPricePerKg || currentInputs.basePrice || 0);
+  if (Math.abs(currPrice - snap.buyerPricePerKg) > 0.001) {
+    modified.push(`Buyer Price (Snapshot: UGX ${snap.buyerPricePerKg}, Current: UGX ${currPrice})`);
+  }
+
+  const currTransport = Number(currentInputs.transportCost || 0);
+  if (Math.abs(currTransport - snap.transportCost) > 0.001) {
+    modified.push(`Transport Cost (Snapshot: UGX ${snap.transportCost}, Current: UGX ${currTransport})`);
+  }
+
+  const currPayer = String(currentInputs.feePayer || "BUYER").toUpperCase();
+  if (currPayer !== String(snap.feePayer || "BUYER").toUpperCase()) {
+    modified.push(`Fee Payer (Snapshot: ${snap.feePayer}, Current: ${currPayer})`);
+  }
+
+  const hasAmendment = modified.length > 0;
+
+  return {
+    hasAmendment,
+    isSnapshotStale: hasAmendment,
+    modifiedFields: modified,
+    recommendation: hasAmendment
+      ? "Material financial terms have changed. Approved snapshot is invalidated. Matrix must be recalculated and resubmitted for Clarence approval."
+      : "Current terms match the approved immutable snapshot.",
+  };
+}
